@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>X Helper</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <img src="icons/icon-32.png" alt="" class="brand-icon">
+        <div class="brand-text">
+          <h1>X Helper</h1>
+          <p class="brand-sub">推文翻译 · AI 回复草稿</p>
+        </div>
+      </header>
+
+      <nav class="tabs" role="tablist">
+        <button type="button" class="tab is-active" data-tab="translate" role="tab">
+          <span class="tab-emoji">📖</span><span class="tab-label">翻译</span>
+        </button>
+        <button type="button" class="tab" data-tab="reply" role="tab">
+          <span class="tab-emoji">💬</span><span class="tab-label">回复</span>
+        </button>
+        <button type="button" class="tab" data-tab="providers" role="tab">
+          <span class="tab-emoji">🔑</span><span class="tab-label">凭据</span>
+        </button>
+        <button type="button" class="tab" data-tab="personas" role="tab">
+          <span class="tab-emoji">🎭</span><span class="tab-label">人设</span>
+        </button>
+      </nav>
+
+      <!-- 翻译 -->
+      <section class="panel is-active" data-panel="translate">
+        <div class="section">
+          <div class="row-between">
+            <p class="section-title">自动翻译</p>
+            <label class="switch" title="开启或关闭自动翻译">
+              <input id="translateEnabled" type="checkbox" aria-label="开启或关闭自动翻译">
+              <span></span>
+            </label>
+          </div>
+
+          <label class="field">
+            <span>翻译供应商</span>
+            <select id="translateProviderId"></select>
+          </label>
+          <p class="hint-inline" id="translateProviderHint"></p>
+
+          <label class="field">
+            <span>目标语言</span>
+            <select id="translateTargetLanguage">
+              <option value="zh-CN">简体中文</option>
+              <option value="zh-TW">繁體中文</option>
+              <option value="en">English</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="row">
+          <button id="saveTranslate" type="button">保存</button>
+          <button id="testTranslate" class="secondary" type="button">测试连接</button>
+        </div>
+        <p id="translateStatus" class="status" aria-live="polite"></p>
+      </section>
+
+      <!-- 回复 -->
+      <section class="panel" data-panel="reply">
+        <div class="section">
+          <p class="section-title">AI 回复</p>
+          <label class="field">
+            <span>回复供应商</span>
+            <select id="replyProviderId"></select>
+          </label>
+          <p class="hint-inline" id="replyProviderHint"></p>
+        </div>
+
+        <div class="row">
+          <button id="saveReply" type="button">保存</button>
+          <button id="testReply" class="secondary" type="button">测试连接</button>
+        </div>
+        <p id="replyStatus" class="status" aria-live="polite"></p>
+
+        <p class="hint">推文操作栏会出现「AI 回」按钮，点开生成 3 条候选。生成的内容只进草稿，由你手动发送。</p>
+      </section>
+
+      <!-- 凭据 -->
+      <section class="panel" data-panel="providers">
+        <div class="section">
+          <p class="section-title">API 凭据</p>
+          <p class="hint-inline">每个供应商只填一次，翻译和回复共享。</p>
+
+          <label class="field">
+            <span>
+              <span>选择供应商</span>
+              <span id="credentialStatusBadge" class="key-badge" hidden></span>
+            </span>
+            <select id="credentialProviderId"></select>
+          </label>
+          <label class="field" id="apiKeyField">
+            <span>API Key</span>
+            <input id="apiKey" type="password" autocomplete="off" placeholder="sk-...">
+          </label>
+          <a id="keyHelp" class="help-link" href="#" target="_blank" rel="noopener" hidden>获取 API Key →</a>
+          <label class="field" id="modelField">
+            <span>
+              <span>模型</span>
+              <button type="button" id="refreshModels" class="link-btn" title="从 API 拉取最新模型列表">⟳ 刷新</button>
+            </span>
+            <select id="modelSelect"></select>
+          </label>
+          <label class="field" id="customModelField" hidden>
+            <span>自定义模型名</span>
+            <input id="modelInput" type="text" autocomplete="off" spellcheck="false" placeholder="手动输入模型名">
+          </label>
+          <label class="field" id="baseUrlField">
+            <span>API Base URL</span>
+            <input id="baseUrl" type="text" autocomplete="off" spellcheck="false" placeholder="https://api.example.com/v1">
+          </label>
+        </div>
+
+        <div class="row">
+          <button id="saveCredentials" type="button">保存凭据</button>
+        </div>
+        <p id="credentialStatus" class="status" aria-live="polite"></p>
+      </section>
+
+      <!-- 人设 -->
+      <section class="panel" data-panel="personas">
+        <div class="section">
+          <div class="row-between">
+            <p class="section-title">回复人设</p>
+            <button id="addPersona" class="secondary small" type="button">+ 新建</button>
+          </div>
+          <ul id="personaList" class="persona-list"></ul>
+          <div id="personaEditor" class="persona-editor" hidden>
+            <label class="field">
+              <span>名称</span>
+              <input id="personaName" type="text" maxlength="24" placeholder="比如：Crypto 老炮">
+            </label>
+            <label class="field">
+              <span>提示词（人设描述）</span>
+              <textarea id="personaPrompt" rows="6" placeholder="描述这个人设的身份、语气、口头禅、禁忌…"></textarea>
+            </label>
+            <div class="row">
+              <button id="savePersona" type="button">保存人设</button>
+              <button id="cancelPersona" class="secondary" type="button">取消</button>
+              <button id="resetPersonas" class="ghost" type="button" title="恢复内置人设">恢复默认</button>
+            </div>
+          </div>
+        </div>
+        <p id="personaStatus" class="status" aria-live="polite"></p>
+      </section>
+
+      <footer>
+        <span>v1.0.0</span>
+        <span class="footer-sep">·</span>
+        <a href="https://github.com/Shanks100/xhelper" target="_blank" rel="noopener">GitHub</a>
+      </footer>
+    </main>
+
+    <script src="personas.js"></script>
+    <script src="providers.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

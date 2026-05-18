@@ -1,0 +1,17 @@
+# 含可能填入的 API Key，禁止上传
+secrets.js
+
+# 系统 / 编辑器
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# 依赖（如果未来加进来）
+node_modules/
+
+# 临时文件
+*.log
+*.tmp
+.env
+.env.*
