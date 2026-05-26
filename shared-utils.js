@@ -1,8 +1,8 @@
 /**
- * X Helper · 共享工具库
+ * PageLingo · 共享工具库
  * 同时供 content script 和 service worker 使用：
- *   - content script: manifest content_scripts.js 数组里排在 content.js 前面
- *   - service worker: importScripts("lib.js")
+ *   - content script: manifest content_scripts.js 数组里排在 x-content.js 前面
+ *   - service worker: importScripts("shared-utils.js")
  *
  * 所有内容挂在 self 顶层，避免 ES module 在 MV3 service worker 上的兼容麻烦。
  */

@@ -1,6 +1,6 @@
 /* eslint-disable no-undef */
 
-try { importScripts("lib.js"); } catch (_e) { /* 缺失会让所有功能失效，启动时会报错给用户 */ }
+try { importScripts("shared-utils.js"); } catch (_e) { /* 缺失会让所有功能失效，启动时会报错给用户 */ }
 try { importScripts("secrets.js"); } catch (_e) { self.HELPER_DEEPSEEK_API_KEY = ""; }
 try { importScripts("personas.js"); } catch (_e) { self.DEFAULT_PERSONAS = []; }
 try { importScripts("providers.js"); } catch (_e) {
@@ -44,7 +44,7 @@ const DEFAULT_SETTINGS = {
   [STORAGE_KEYS.personas]: []
 };
 
-// 翻译目标语言 → 母语名映射，从 lib.js 引入；若 lib.js 没加载，回退一个最小集合
+// 翻译目标语言 → 母语名映射，从 shared-utils.js 引入；若 shared-utils.js 没加载，回退一个最小集合
 const LANGUAGE_NAMES = self.TRANSLATE_LANGUAGE_NAMES || {
   "zh-CN": "简体中文", "zh-TW": "繁體中文", ja: "日本語", ko: "한국어", en: "English"
 };
@@ -138,13 +138,25 @@ async function migrateLegacySettings() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message?.type) {
     case "translateTweet":
-      translateTweet(message.text, message.targetLanguage, message.forceRefresh)
+      translateTweet(message.text, message.targetLanguage, message.forceRefresh, { profile: "x" })
+        .then((result) => sendResponse({ ok: true, ...result }))
+        .catch((error) => sendResponse({ ok: false, error: error.message }));
+      return true;
+
+    case "translateText":
+      translateTweet(message.text, message.targetLanguage, message.forceRefresh, {
+        profile: message.profile || "web",
+        url: message.url || ""
+      })
         .then((result) => sendResponse({ ok: true, ...result }))
         .catch((error) => sendResponse({ ok: false, error: error.message }));
       return true;
 
     case "translateBatch":
-      translateBatch(message.texts, message.targetLanguage, message.forceRefresh)
+      translateBatch(message.texts, message.targetLanguage, message.forceRefresh, {
+        profile: message.profile || "x",
+        url: message.url || ""
+      })
         .then((results) => sendResponse({ ok: true, results }))
         .catch((error) => sendResponse({ ok: false, error: error.message }));
       return true;
@@ -361,7 +373,7 @@ function trimCache() {
   }
 }
 
-async function translateTweet(text, targetLanguage, forceRefresh = false) {
+async function translateTweet(text, targetLanguage, forceRefresh = false, options = {}) {
   const normalizedText = String(text || "").trim();
   if (!normalizedText) return { translatedText: "", providerLabel: "", fellBack: false };
 
@@ -372,13 +384,14 @@ async function translateTweet(text, targetLanguage, forceRefresh = false) {
   const language = targetLanguage || t.targetLanguage || "zh-CN";
   const providerId = t.providerId || "google";
   const resolved = resolveProviderConfig(providerId, providerConfigs);
-  const cacheKey = `${providerId}:${resolved.model}:${language}:${normalizedText}`;
+  const profile = normalizeTranslateProfile(options.profile, options.url);
+  const cacheKey = `${providerId}:${resolved.model}:${language}:${profile}:${normalizedText}`;
 
   if (!cacheLoaded) await loadCacheFromStorage();
   if (!forceRefresh && translateCache.has(cacheKey)) return translateCache.get(cacheKey);
   if (!forceRefresh && inflightRequests.has(cacheKey)) return inflightRequests.get(cacheKey);
 
-  const promise = doTranslate(normalizedText, language, providerId, resolved, cacheKey);
+  const promise = doTranslate(normalizedText, language, providerId, resolved, cacheKey, profile);
   inflightRequests.set(cacheKey, promise);
   try {
     return await promise;
@@ -391,10 +404,10 @@ async function translateTweet(text, targetLanguage, forceRefresh = false) {
  * 批量翻译。content script 给一组文本 → 后台并行 fan out → 结果按原顺序返回。
  * 单条失败用 ok:false 报错占位，不影响其它条。
  */
-async function translateBatch(texts, targetLanguage, forceRefresh = false) {
+async function translateBatch(texts, targetLanguage, forceRefresh = false, options = {}) {
   if (!Array.isArray(texts) || texts.length === 0) return [];
   const settled = await Promise.allSettled(
-    texts.map((t) => translateTweet(t, targetLanguage, forceRefresh))
+    texts.map((t) => translateTweet(t, targetLanguage, forceRefresh, options))
   );
   return settled.map((s) =>
     s.status === "fulfilled"
@@ -403,7 +416,7 @@ async function translateBatch(texts, targetLanguage, forceRefresh = false) {
   );
 }
 
-async function doTranslate(text, language, providerId, resolved, cacheKey) {
+async function doTranslate(text, language, providerId, resolved, cacheKey, profile = "x") {
   let translated = "";
   let actualProvider = providerId;
   let actualModel = resolved.model || "";
@@ -420,9 +433,9 @@ async function doTranslate(text, language, providerId, resolved, cacheKey) {
       actualModel = "";
       fellBack = true;
     } else if (resolved.provider.api === "anthropic") {
-      translated = await translateWithClaude(text, language, resolved);
+      translated = await translateWithClaude(text, language, resolved, profile);
     } else {
-      translated = await translateWithOpenAICompat(text, language, resolved);
+      translated = await translateWithOpenAICompat(text, language, resolved, profile);
     }
   } catch (error) {
     if (providerId !== "google") {
@@ -455,6 +468,17 @@ function providerLabelOf(providerId) {
   return provider?.name || providerId;
 }
 
+function normalizeTranslateProfile(profile, url = "") {
+  const raw = String(profile || "").toLowerCase();
+  if (raw === "github" || /(^|\.)github\.com$/i.test(safeHost(url))) return "github";
+  if (raw === "web" || raw === "article") return "web";
+  return "x";
+}
+
+function safeHost(url) {
+  try { return new URL(url).host; } catch (_e) { return ""; }
+}
+
 function isRefusal(text) {
   if (!text) return false;
   const sample = text.trim().slice(0, 120).toLowerCase();
@@ -470,11 +494,11 @@ function isRefusal(text) {
   return patterns.some((re) => re.test(sample));
 }
 
-async function translateWithOpenAICompat(text, targetLanguage, resolved) {
+async function translateWithOpenAICompat(text, targetLanguage, resolved, profile = "x") {
   const languageName = LANGUAGE_NAMES[targetLanguage] || targetLanguage;
-  const maxTokens = Math.min(1024, Math.max(80, Math.ceil(text.length * 1.5) + 50));
+  const maxTokens = Math.min(1800, Math.max(80, Math.ceil(text.length * 1.6) + 80));
   const raw = await chatCompletion(resolved, {
-    system: buildTranslateSystemPrompt(languageName),
+    system: buildTranslateSystemPrompt(languageName, profile),
     user: text,
     maxTokens,
     temperature: 0,
@@ -483,11 +507,11 @@ async function translateWithOpenAICompat(text, targetLanguage, resolved) {
   return parseTranslationOutput(raw);
 }
 
-async function translateWithClaude(text, targetLanguage, resolved) {
+async function translateWithClaude(text, targetLanguage, resolved, profile = "x") {
   const languageName = LANGUAGE_NAMES[targetLanguage] || targetLanguage;
-  const maxTokens = Math.min(1024, Math.max(80, Math.ceil(text.length * 1.5) + 50));
+  const maxTokens = Math.min(1800, Math.max(80, Math.ceil(text.length * 1.6) + 80));
   const raw = await chatCompletion(resolved, {
-    system: buildTranslateSystemPrompt(languageName),
+    system: buildTranslateSystemPrompt(languageName, profile),
     user: text,
     maxTokens,
     temperature: 0
@@ -496,7 +520,10 @@ async function translateWithClaude(text, targetLanguage, resolved) {
   return parseTranslationOutput(raw);
 }
 
-function buildTranslateSystemPrompt(languageName) {
+function buildTranslateSystemPrompt(languageName, profile = "x") {
+  if (profile === "github") return buildGithubTranslateSystemPrompt(languageName);
+  if (profile === "web") return buildWebTranslateSystemPrompt(languageName);
+
   if (languageName === "简体中文") {
     return [
       "你是 X（Twitter）专业译者，把推文译成【简体中文】。",
@@ -529,6 +556,36 @@ function buildTranslateSystemPrompt(languageName) {
     `保留 @用户、#标签、链接、$代码、emoji、数字单位原样。语气口语化贴近社交媒体。`,
     `行业缩写若目标语言里没有现成对应表达，先翻译再用括号补简短注释。`,
     `原文已是${languageName}、或只含 @用户/链接/emoji、或想拒答道歉 → translation 返回空字符串。`
+  ].join("\n");
+}
+
+function buildGithubTranslateSystemPrompt(languageName) {
+  const target = languageName || "目标语言";
+  return [
+    `你是专业技术翻译，正在翻译 GitHub 页面内容，目标语言是【${target}】。`,
+    '只返回 JSON：{"translation":"<译文>"}。不要解释，不要 Markdown 代码块。',
+    "",
+    "翻译范围可能来自 README、Issue、PR、Release、Discussion、Wiki 或代码审查评论。",
+    "保持技术准确，不要意译 API、CLI 参数、函数名、变量名、包名、文件名、路径、commit hash、版本号、错误码、URL。",
+    "保留 Markdown 结构、行内代码、列表编号、引用符号、链接文本的含义；代码块内容不要翻译。",
+    "GitHub 固定术语建议：issue=议题，pull request/PR=PR，commit=提交，branch=分支，release=发布，workflow=工作流，action=Action，runner=运行器，artifact=构件，review=审查，merge=合并，rebase=变基，squash=压缩合并。",
+    "英文技术词在中文开发者圈更常用时保留英文，例如 API、SDK、CLI、CI、CD、JSON、YAML、HTTP、token、cache、hook、middleware。",
+    "若原文已经是目标语言，或只有代码、日志、链接、用户名、路径，translation 返回空字符串。",
+    "语气自然、清楚、像开发者给开发者看的译文。"
+  ].join("\n");
+}
+
+function buildWebTranslateSystemPrompt(languageName) {
+  const target = languageName || "目标语言";
+  return [
+    `你是网页内容翻译助手，目标语言是【${target}】。`,
+    '只返回 JSON：{"translation":"<译文>"}。不要解释，不要 Markdown 代码块。',
+    "",
+    "翻译新闻、文档、博客、产品说明、论坛和帮助中心等常见网页正文。",
+    "保持原意和语气，不要总结，不要扩写，不要添加观点。",
+    "保留品牌名、人名、产品名、URL、邮箱、代码、命令、快捷键、版本号、单位和数字。",
+    "若是标题，译得短而有力；若是段落，译得自然顺畅；若是按钮或菜单，译得简洁。",
+    "若原文已经是目标语言，或只有链接、用户名、数字、符号、代码，translation 返回空字符串。"
   ].join("\n");
 }
 
@@ -962,7 +1019,7 @@ async function callOpenAICompat({
   // OpenRouter 推荐带 referer / title，不带也能用
   if (resolved.provider.id === "openrouter") {
     headers["HTTP-Referer"] = "https://x.com";
-    headers["X-Title"] = "X Helper";
+    headers["X-Title"] = "PageLingo";
   }
 
   let response = await fetchWithRetry(

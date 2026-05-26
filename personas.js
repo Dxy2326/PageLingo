@@ -5,7 +5,7 @@
  * 设计原则：
  * - 每个人设有清晰的差异化标签（语气 + 立场 + 句式偏好）
  * - 避免风格互相打架（比如"阴阳怪气"和"段子手"不混在一起）
- * - 都自带"去 AI 味"硬约束（已在 background.js 的 system prompt 里有一遍，
+ * - 都自带"去 AI 味"硬约束（已在 service-worker.js 的 system prompt 里有一遍，
  *   人设里再强调一次帮模型记住）
  */
 self.DEFAULT_PERSONAS = [

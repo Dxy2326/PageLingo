@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
-  "name": "X Helper",
-  "description": "X / Twitter 双合一助手：自动翻译外文推文 + 一键生成 3 条真人感 AI 回复草稿。",
+  "name": "PageLingo",
+  "description": "多站点网页翻译助手：优化 X / Twitter、GitHub 和常用英文网页翻译，并保留 X AI 回复草稿能力。",
   "version": "1.0.0",
   "permissions": ["storage", "clipboardWrite"],
   "icons": {
@@ -15,6 +15,8 @@
     "https://*.x.com/*",
     "https://twitter.com/*",
     "https://*.twitter.com/*",
+    "https://*/*",
+    "http://*/*",
     "https://translate.googleapis.com/*",
     "https://api.deepseek.com/*",
     "https://api.openai.com/*",
@@ -27,7 +29,7 @@
     "https://*/*"
   ],
   "background": {
-    "service_worker": "background.js"
+    "service_worker": "service-worker.js"
   },
   "content_scripts": [
     {
@@ -37,12 +39,26 @@
         "https://twitter.com/*",
         "https://*.twitter.com/*"
       ],
-      "js": ["lib.js", "content.js"],
+      "js": ["shared-utils.js", "x-content.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://*/*",
+        "http://*/*"
+      ],
+      "exclude_matches": [
+        "https://x.com/*",
+        "https://*.x.com/*",
+        "https://twitter.com/*",
+        "https://*.twitter.com/*"
+      ],
+      "js": ["site-profiles.js", "web-translator.js"],
       "run_at": "document_idle"
     }
   ],
   "action": {
-    "default_title": "X Helper",
+    "default_title": "PageLingo",
     "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon-16.png",

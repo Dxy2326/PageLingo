@@ -1,6 +1,6 @@
-# 𝕏 Helper
+# PageLingo
 
-> X / Twitter 双合一助手 = 自动翻译外文推文 + 一键生成 3 条真人感 AI 回复草稿。**不自动发推**。
+> 多站点网页翻译助手：自动翻译 X / Twitter、GitHub 和常见英文网页，并保留 X 上的一键 AI 回复草稿。**不自动发推**。
 
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-brightgreen.svg)](manifest.json)
 ![Version](https://img.shields.io/badge/version-1.0.0-orange.svg)
@@ -9,8 +9,10 @@
 
 ## ✨ 特性
 
-### 📖 自动翻译
-- 打开 X，外文推文下方自动出现中文译文，**无需点任何按钮**
+### 📖 多站点自动翻译
+- 打开 X / Twitter，外文推文下方自动出现中文译文，**无需点任何按钮**
+- 打开 GitHub，README、Issue、PR、Release、Discussion 等正文自动翻译，并使用技术翻译风格
+- 打开常见英文网页，正文区域自动翻译，避开导航、按钮、代码块和输入框
 - 默认走 **Google 免费翻译**，开箱即用
 - 也支持 LLM 翻译：DeepSeek / OpenAI / Claude / Gemini / OpenRouter / Groq / 自定义
 - 失败自动降级 Google，从不让你看到空白
@@ -28,6 +30,8 @@
 
 ### ⚡ 性能 / 可控性
 - 同一条 API Key **翻译和回复共用**（只填一次，各自挑模型）
+- 普通网页按可见区域懒加载翻译，批量请求减少抖动
+- 站点规则独立在 `site-profiles.js`，后续加站点不需要改扫描主逻辑
 - service worker 启动时 **TLS 预连**；hover「AI 回」按钮 200ms 时自动唤醒
 - 生成中点按钮可**取消**
 - 实时显示 X 字数权重计数器（中文 ×2、其他 ×1）
@@ -36,7 +40,8 @@
 ### 🛡️ 安全
 - **永远不会自动发推**。「填入回复框」只是写到 contenteditable，跟你手动粘贴一样
 - API Key 只存在浏览器 `chrome.storage.sync`（同步到你登录的 Chrome 账户），不发到任何第三方
-- 不读 / 不存 X 账号密码，不监听其它网站
+- 不读 / 不存 X 账号密码
+- 网页翻译脚本只读取当前页面可见文本，并把待翻译文本发给你选择的翻译供应商
 
 ---
 
@@ -44,11 +49,11 @@
 
 1. 下载源码：
    ```bash
-   git clone https://github.com/Shanks100/xhelper.git
+   git clone https://github.com/Shanks100/PageLingo.git
    ```
 2. Chrome / Edge 打开 `chrome://extensions/`，开启「开发者模式」
-3. 点「加载已解压的扩展程序」，选择 `xhelper` 目录
-4. 打开 [https://x.com](https://x.com)，时间线自动翻译，每条推文出现「AI 回」按钮
+3. 点「加载已解压的扩展程序」，选择 `PageLingo` 目录
+4. 打开 [https://x.com](https://x.com)、GitHub 或常见英文网页，正文会自动出现译文
 
 ---
 
@@ -88,25 +93,33 @@
 ## 📁 文件结构
 
 ```
-xhelper/
+PageLingo/
 ├── manifest.json        # MV3 清单
-├── background.js        # service worker：翻译 + 回复 + 模型列表
-├── content.js           # 注入页面：扫推文 / 译文块 / AI 回按钮 / 填编辑器 / 快捷键
+├── service-worker.js    # 后台：翻译 + 回复 + 模型列表
+├── x-content.js         # X 专用：扫推文 / 译文块 / AI 回按钮 / 填编辑器 / 快捷键
+├── web-translator.js    # 通用网页：正文扫描 / 批量翻译 / 译文渲染
+├── site-profiles.js     # 非 X 站点适配配置
 ├── popup.html/js/css    # 4 标签弹窗
-├── lib.js               # content + bg 共享纯函数（语言检测、字数权重等）
+├── shared-utils.js      # content + 后台共享纯函数（语言检测、字数权重等）
 ├── personas.js          # 12 个内置人设
 ├── providers.js         # 供应商定义（协议形状 + 默认模型）
 ├── secrets.example.js   # secrets.js 模板（默认空）
 ├── icons/               # 16/32/48/128 PNG
+├── docs/                # 扩展文档
 ├── tools/               # 开发辅助（图标生成等）
 └── README.md
 ```
+
+### 扩展新网站
+
+非 X 网站走 `site-profiles.js` 的声明式配置。新增网站时优先加站点 profile，只有需要新翻译风格时才改 `service-worker.js` 的 prompt。详细说明见 [docs/SITE_PROFILES.md](docs/SITE_PROFILES.md)。
 
 ---
 
 ## 🐛 已知问题
 
-- X 页面结构若大改，可能需要调整 `content.js` 里的 `[data-testid]` 选择器
+- X 页面结构若大改，可能需要调整 `x-content.js` 里的 `[data-testid]` 选择器
+- 普通网页结构差异很大，少数网站可能需要新增站点 profile 才能获得最佳效果
 - 部分 LLM 安全策略较严，遇到敏感推文可能返回空译文（已识别拒答模式并跳过）
 - 浏览器扩展中的 API Key 无法做到真正保密，**别把带 Key 的 secrets.js 提交到任何远程仓库**
 

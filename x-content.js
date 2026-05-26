@@ -1,7 +1,7 @@
 /* global chrome */
 
 /* =========================================================================
- *  X Helper · 内容脚本
+ *  PageLingo · X 内容脚本
  *  同时负责：
  *    1) 自动翻译推文，在 tweetText 下面插入「译文」块
  *    2) 在每条推文操作栏插入「AI 回」按钮，弹出回复草稿面板
@@ -10,6 +10,19 @@
 
 const TWEET_SELECTOR = 'article[data-testid="tweet"], article[role="article"]';
 const TEXT_SELECTOR = '[data-testid="tweetText"]';
+const LONG_TEXT_SELECTOR = [
+  '[data-testid="articleText"]',
+  '[data-testid="tweetDetailNote"]',
+  '[data-testid="tweetDetailNoteText"]',
+  '[data-testid="NoteTweetText"]',
+  '[data-testid="noteTweetText"]'
+].join(", ");
+const LONG_TEXT_CONTAINER_SELECTOR = [
+  '[data-testid="article"]',
+  '[data-testid="tweetDetailNote"]',
+  '[data-testid="NoteTweet"]',
+  '[data-testid="noteTweet"]'
+].join(", ");
 
 /* ---------- 翻译相关常量 ---------- */
 const TRANSLATED_ATTR = "data-xh-tr-state";
@@ -219,10 +232,10 @@ function enqueueTweetForTranslation(tweet) {
   if (!tweet || !tweet.isConnected) return;
   if (tweet.getAttribute(TRANSLATED_ATTR)) return;
 
-  const textNode = tweet.querySelector(TEXT_SELECTOR);
-  if (!textNode) return;
+  const content = extractPrimaryTweetContent(tweet);
+  if (!content) return;
 
-  const text = extractTweetText(textNode);
+  const { textNode, text } = content;
   if (!text) {
     tweet.setAttribute(TRANSLATED_ATTR, "skip");
     return;
@@ -419,6 +432,70 @@ function extractTweetText(container) {
   return raw.replace(/\s+\n/g, "\n").trim();
 }
 
+function extractPrimaryTweetContent(tweet) {
+  const textNodes = findPrimaryTweetTextNodes(tweet);
+  if (textNodes.length === 0) return null;
+
+  const parts = [];
+  const seen = new Set();
+  for (const node of textNodes) {
+    const text = extractTweetText(node);
+    if (!text || seen.has(text)) continue;
+    seen.add(text);
+    parts.push(text);
+  }
+
+  const text = parts.join("\n\n").trim();
+  if (!text) return null;
+
+  return {
+    textNode: textNodes[textNodes.length - 1],
+    text
+  };
+}
+
+function findPrimaryTweetTextNodes(tweet) {
+  const candidates = [];
+
+  const add = (node) => {
+    if (!node || !tweet.contains(node)) return;
+    if (isQuotedTweetNode(tweet, node)) return;
+    if (candidates.some((item) => item === node || item.contains(node))) return;
+
+    for (let i = candidates.length - 1; i >= 0; i -= 1) {
+      if (node.contains(candidates[i])) candidates.splice(i, 1);
+    }
+    candidates.push(node);
+  };
+
+  tweet.querySelectorAll(TEXT_SELECTOR).forEach(add);
+  tweet.querySelectorAll(LONG_TEXT_SELECTOR).forEach(add);
+  tweet.querySelectorAll(LONG_TEXT_CONTAINER_SELECTOR).forEach((container) => {
+    const langBlocks = container.matches("[lang]")
+      ? [container]
+      : Array.from(container.querySelectorAll("[lang]"));
+    langBlocks.forEach(add);
+  });
+
+  if (candidates.length === 0) {
+    tweet.querySelectorAll("[lang]").forEach((node) => {
+      const text = extractTweetText(node);
+      if (text.length < 20) return;
+      if (node.closest('[data-testid="User-Name"], [role="button"], time')) return;
+      add(node);
+    });
+  }
+
+  return candidates;
+}
+
+function isQuotedTweetNode(tweet, node) {
+  const quoteLink = node.closest('[role="link"]');
+  if (!quoteLink || !tweet.contains(quoteLink)) return false;
+  if (quoteLink.querySelector(TEXT_SELECTOR) !== node && !quoteLink.contains(node)) return false;
+  return !!quoteLink.querySelector('[data-testid="User-Name"]');
+}
+
 function shouldTranslate(text) {
   if (!text || text.length < 2) return false;
 
@@ -481,8 +558,8 @@ function findActionBar(tweet) {
 function attachReplyButton(tweet) {
   if (!tweet || !tweet.isConnected) return;
 
-  const textNode = tweet.querySelector(TEXT_SELECTOR);
-  if (!textNode) return;
+  const content = extractPrimaryTweetContent(tweet);
+  if (!content) return;
 
   const actionBar = findActionBar(tweet);
   if (!actionBar) return;
@@ -528,10 +605,10 @@ function toggleReplyPanel(tweet) {
     return;
   }
 
-  const textNode = tweet.querySelector(TEXT_SELECTOR);
-  if (!textNode) return;
+  const content = extractPrimaryTweetContent(tweet);
+  if (!content) return;
 
-  const tweetText = (textNode.innerText || "").trim();
+  const { textNode, text: tweetText } = content;
   if (!tweetText) return;
 
   const author = extractAuthor(tweet);
@@ -937,9 +1014,9 @@ function extractAuthor(tweet) {
   return "";
 }
 
-/* ---------- 共享纯函数：从 lib.js 引入 ----------
+/* ---------- 共享纯函数：从 shared-utils.js 引入 ----------
  * detectReplyLanguage / LANG_LABEL / twitterWeight* / escapeHtml 之前都在这里定义，
- * 现在移到 lib.js 单一来源。这里只做本地别名，避免改动调用点。
+ * 现在移到 shared-utils.js 单一来源。这里只做本地别名，避免改动调用点。
  */
 const detectReplyLanguage = self.detectLanguage;
 const LANG_LABEL = Object.fromEntries(Object.entries(self.LANGS || {}).map(([k, v]) => [k, v.label]));
@@ -957,7 +1034,7 @@ function flashButton(btn, msg) {
   }, 1200);
 }
 
-/* ---------- X 字数权重 / escapeHtml 已迁到 lib.js（顶部别名声明） ---------- */
+/* ---------- X 字数权重 / escapeHtml 已迁到 shared-utils.js（顶部别名声明） ---------- */
 
 
 /* =========================================================================
