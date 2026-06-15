@@ -36,9 +36,9 @@ GitHub 内容会使用单独的技术翻译风格：
 - 支持内置人设、语气调节、引用推文上下文
 - 支持取消生成
 
-## 给别人使用
+## 安装使用
 
-### 方式一：下载 GitHub ZIP
+### 方式一：下载源码 ZIP
 
 1. 打开仓库页面，点击 `Code` → `Download ZIP`
 2. 解压 ZIP
@@ -56,7 +56,7 @@ GitHub 内容会使用单独的技术翻译风格：
 powershell -ExecutionPolicy Bypass -File .\tools\package-extension.ps1
 ```
 
-脚本会生成 `dist/PageLingo-1.0.0.zip`。把这个 ZIP 发给别人，对方解压后按上面的步骤加载即可。
+脚本会生成 `dist/PageLingo-1.0.0.zip`。下载或收到发布包后，解压并按上面的步骤加载即可。
 
 发布包会自动排除 `.git`、`dist`、`node_modules`、编辑器目录和本机 `secrets.js`。
 
