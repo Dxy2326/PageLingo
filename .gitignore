@@ -9,6 +9,7 @@ Thumbs.db
 
 # 依赖（如果未来加进来）
 node_modules/
+dist/
 
 # 临时文件
 *.log

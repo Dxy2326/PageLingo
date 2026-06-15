@@ -36,7 +36,31 @@ GitHub 内容会使用单独的技术翻译风格：
 - 支持内置人设、语气调节、引用推文上下文
 - 支持取消生成
 
-## 安装
+## 给别人使用
+
+### 方式一：下载 GitHub ZIP
+
+1. 打开仓库页面，点击 `Code` → `Download ZIP`
+2. 解压 ZIP
+3. 打开 Chrome / Edge 的扩展管理页：`chrome://extensions/`
+4. 开启「开发者模式」
+5. 点击「加载已解压的扩展程序」
+6. 选择解压后的 `PageLingo` 项目目录
+7. 打开 X、GitHub 或英文网页开始使用
+
+### 方式二：使用发布包
+
+维护者可以在项目根目录运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\package-extension.ps1
+```
+
+脚本会生成 `dist/PageLingo-1.0.0.zip`。把这个 ZIP 发给别人，对方解压后按上面的步骤加载即可。
+
+发布包会自动排除 `.git`、`dist`、`node_modules`、编辑器目录和本机 `secrets.js`。
+
+## 开发安装
 
 ```bash
 git clone https://github.com/Dxy2326/PageLingo.git
@@ -83,6 +107,8 @@ PageLingo 需要在网页中读取可见文本，才能把正文发送给翻译�
 当前版本会请求较宽的网站访问权限，以支持通用网页翻译。浏览器可能因此在扩展管理页显示权限警告。后续可以改成「默认只启用 X / GitHub，其他网站按需授权」的模式来减少权限提示。
 
 API Key 存在浏览器的 `chrome.storage.sync` 中。不要把包含真实 Key 的文件提交到仓库。
+
+更完整的数据说明见 [PRIVACY.md](PRIVACY.md)。
 
 ## 项目结构
 
