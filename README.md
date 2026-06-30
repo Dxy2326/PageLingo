@@ -38,7 +38,18 @@ GitHub 内容会使用单独的技术翻译风格：
 
 ## 安装使用
 
-### 方式一：下载源码 ZIP
+### 方式一：下载发布包
+
+1. 打开仓库的 `Releases` 页面
+2. 下载 `PageLingo-1.0.0.zip`
+3. 解压 ZIP
+4. 打开 Chrome / Edge 的扩展管理页：`chrome://extensions/`
+5. 开启「开发者模式」
+6. 点击「加载已解压的扩展程序」
+7. 选择解压后的 `PageLingo` 目录
+8. 打开 X、GitHub 或英文网页开始使用
+
+### 方式二：下载源码 ZIP
 
 1. 打开仓库页面，点击 `Code` → `Download ZIP`
 2. 解压 ZIP
@@ -47,18 +58,6 @@ GitHub 内容会使用单独的技术翻译风格：
 5. 点击「加载已解压的扩展程序」
 6. 选择解压后的 `PageLingo` 项目目录
 7. 打开 X、GitHub 或英文网页开始使用
-
-### 方式二：使用发布包
-
-维护者可以在项目根目录运行：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\tools\package-extension.ps1
-```
-
-脚本会生成 `dist/PageLingo-1.0.0.zip`。下载或收到发布包后，解压并按上面的步骤加载即可。
-
-发布包会自动排除 `.git`、`dist`、`node_modules`、编辑器目录和本机 `secrets.js`。
 
 ## 开发安装
 
@@ -71,6 +70,18 @@ git clone https://github.com/Dxy2326/PageLingo.git
 3. 点击「加载已解压的扩展程序」
 4. 选择 `PageLingo` 项目目录
 5. 打开 X、GitHub 或英文网页开始使用
+
+## 打包与验证
+
+维护者可以在项目根目录运行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\tools\package-extension.ps1
+```
+
+脚本会先检查必需文件和 JavaScript 语法，再生成 `dist/PageLingo-1.0.0.zip`。
+
+发布包会自动排除 `.git`、`dist`、`node_modules`、编辑器目录和本机 `secrets.js`。
 
 ## 配置
 
