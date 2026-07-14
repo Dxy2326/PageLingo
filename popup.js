@@ -1,6 +1,11 @@
 /* global chrome */
 
-const DEFAULT_TRANSLATE = { enabled: true, providerId: "google", targetLanguage: "zh-CN" };
+const DEFAULT_TRANSLATE = {
+  enabled: false,
+  providerId: "google",
+  targetLanguage: "zh-CN",
+  allowedHosts: [...(self.DEFAULT_ALLOWED_HOSTS || ["x.com", "twitter.com", "github.com"])]
+};
 const DEFAULT_REPLY = { providerId: "deepseek", lastPersonaId: "crypto-og" };
 
 const CUSTOM_MODEL_VALUE = "__custom__";
@@ -14,6 +19,9 @@ const translateEnabledInput = document.querySelector("#translateEnabled");
 const translateProviderSelect = document.querySelector("#translateProviderId");
 const translateProviderHint = document.querySelector("#translateProviderHint");
 const translateTargetLanguageSelect = document.querySelector("#translateTargetLanguage");
+const currentSiteRow = document.querySelector("#currentSiteRow");
+const currentSiteHostEl = document.querySelector("#currentSiteHost");
+const toggleCurrentSiteBtn = document.querySelector("#toggleCurrentSite");
 const saveTranslateBtn = document.querySelector("#saveTranslate");
 const testTranslateBtn = document.querySelector("#testTranslate");
 const translateStatus = document.querySelector("#translateStatus");
@@ -28,15 +36,12 @@ const replyStatus = document.querySelector("#replyStatus");
 // 凭据
 const credentialProviderSelect = document.querySelector("#credentialProviderId");
 const credentialStatusBadge = document.querySelector("#credentialStatusBadge");
-const apiKeyField = document.querySelector("#apiKeyField");
 const apiKeyInput = document.querySelector("#apiKey");
 const keyHelpLink = document.querySelector("#keyHelp");
-const modelField = document.querySelector("#modelField");
 const modelSelect = document.querySelector("#modelSelect");
 const modelInput = document.querySelector("#modelInput");
 const customModelField = document.querySelector("#customModelField");
 const refreshModelsBtn = document.querySelector("#refreshModels");
-const baseUrlField = document.querySelector("#baseUrlField");
 const baseUrlInput = document.querySelector("#baseUrl");
 const saveCredentialsBtn = document.querySelector("#saveCredentials");
 const credentialStatus = document.querySelector("#credentialStatus");
@@ -51,6 +56,7 @@ const savePersonaBtn = document.querySelector("#savePersona");
 const cancelPersonaBtn = document.querySelector("#cancelPersona");
 const resetPersonasBtn = document.querySelector("#resetPersonas");
 const personaStatus = document.querySelector("#personaStatus");
+const versionEl = document.querySelector("#version");
 
 /* ---- 状态 ---- */
 let providerConfigs = {};
@@ -58,6 +64,7 @@ let translate = { ...DEFAULT_TRANSLATE };
 let reply = { ...DEFAULT_REPLY };
 let personas = [];
 let editingPersonaId = null;
+let currentHost = "";
 
 let currentCredentialProviderId = "deepseek";
 const modelsByProvider = {};
@@ -67,6 +74,7 @@ init();
 
 async function init() {
   setupTabs();
+  versionEl.textContent = `v${chrome.runtime.getManifest().version}`;
 
   // 渲染各个 select
   fillTranslateProviderSelect();
@@ -74,12 +82,23 @@ async function init() {
   fillCredentialProviderSelect();
 
   // 读存储
-  const stored = await chrome.storage.sync.get([
+  const [stored, local] = await Promise.all([
+    chrome.storage.sync.get([
     "translate", "reply", "providerConfigs", "personas"
+    ]),
+    chrome.storage.local.get(["providerConfigs"])
   ]);
   translate = { ...DEFAULT_TRANSLATE, ...(stored.translate || {}) };
+  translate.allowedHosts = Array.isArray(translate.allowedHosts)
+    ? [...new Set(translate.allowedHosts.map((host) => String(host).toLowerCase()))]
+    : [...DEFAULT_TRANSLATE.allowedHosts];
   reply = { ...DEFAULT_REPLY, ...(stored.reply || {}) };
-  providerConfigs = stored.providerConfigs || {};
+  const haveLocalConfigs = Object.prototype.hasOwnProperty.call(local, "providerConfigs");
+  providerConfigs = haveLocalConfigs ? local.providerConfigs || {} : stored.providerConfigs || {};
+  if (!haveLocalConfigs && stored.providerConfigs) {
+    await chrome.storage.local.set({ providerConfigs });
+  }
+  if (stored.providerConfigs) await chrome.storage.sync.remove("providerConfigs");
   personas = stored.personas && stored.personas.length > 0
     ? stored.personas
     : (Array.isArray(self.DEFAULT_PERSONAS) ? [...self.DEFAULT_PERSONAS] : []);
@@ -99,17 +118,35 @@ async function init() {
   fillCredentialForm(currentCredentialProviderId);
 
   renderPersonas();
+  await loadCurrentHost();
 
   // 事件
   bindEvents();
 }
 
 function setupTabs() {
+  const activate = (btn) => {
+    const tab = btn.dataset.tab;
+    tabButtons.forEach((item) => {
+      const active = item === btn;
+      item.classList.toggle("is-active", active);
+      item.setAttribute("aria-selected", String(active));
+      item.tabIndex = active ? 0 : -1;
+    });
+    panels.forEach((panel) => panel.classList.toggle("is-active", panel.dataset.panel === tab));
+  };
+
   for (const btn of tabButtons) {
-    btn.addEventListener("click", () => {
-      const tab = btn.dataset.tab;
-      tabButtons.forEach((b) => b.classList.toggle("is-active", b === btn));
-      panels.forEach((p) => p.classList.toggle("is-active", p.dataset.panel === tab));
+    btn.addEventListener("click", () => activate(btn));
+    btn.addEventListener("keydown", (event) => {
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+      event.preventDefault();
+      const index = tabButtons.indexOf(btn);
+      const nextIndex = event.key === "Home" ? 0
+        : event.key === "End" ? tabButtons.length - 1
+          : (index + (event.key === "ArrowRight" ? 1 : -1) + tabButtons.length) % tabButtons.length;
+      activate(tabButtons[nextIndex]);
+      tabButtons[nextIndex].focus();
     });
   }
 }
@@ -123,6 +160,7 @@ function bindEvents() {
     saveTranslateSettings();
   });
   translateTargetLanguageSelect.addEventListener("change", () => saveTranslateSettings());
+  toggleCurrentSiteBtn.addEventListener("click", toggleCurrentSite);
   saveTranslateBtn.addEventListener("click", () => saveTranslateSettings(true));
   testTranslateBtn.addEventListener("click", testTranslate);
 
@@ -193,7 +231,7 @@ function updateTranslateProviderHint() {
   } else {
     const cfg = providerConfigs[provider.id] || {};
     if (!cfg.apiKey) {
-      translateProviderHint.textContent = `还没填 ${provider.name} 的 API Key，到「供应商」标签里配置。当前会自动降级到 Google 免费翻译。`;
+      translateProviderHint.textContent = `还没填 ${provider.name} 的 API Key，到「凭据」标签里配置。请求会直接报错，不会转发给其他供应商。`;
     } else {
       translateProviderHint.textContent = `当前模型：${cfg.model || provider.defaultModel}`;
     }
@@ -218,10 +256,47 @@ async function saveTranslateSettings(showToast = false) {
   translate = {
     enabled: translateEnabledInput.checked,
     providerId: translateProviderSelect.value,
-    targetLanguage: translateTargetLanguageSelect.value
+    targetLanguage: translateTargetLanguageSelect.value,
+    allowedHosts: translate.allowedHosts
   };
   await chrome.storage.sync.set({ translate });
+  updateCurrentSiteUi();
   if (showToast) showStatus(translateStatus, "已保存", "success", true);
+}
+
+async function loadCurrentHost() {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const url = new URL(tab?.url || "");
+    if (!/^https?:$/.test(url.protocol)) return;
+    currentHost = url.hostname.toLowerCase();
+    currentSiteRow.hidden = false;
+    currentSiteHostEl.textContent = currentHost;
+    updateCurrentSiteUi();
+  } catch (_error) {
+    currentSiteRow.hidden = true;
+  }
+}
+
+function updateCurrentSiteUi() {
+  if (!currentHost) return;
+  const allowed = self.isHostAllowed(currentHost, translate.allowedHosts);
+  toggleCurrentSiteBtn.textContent = allowed ? "移出允许列表" : "允许此网站";
+  toggleCurrentSiteBtn.setAttribute("aria-pressed", String(allowed));
+}
+
+async function toggleCurrentSite() {
+  if (!currentHost) return;
+  const hosts = new Set(translate.allowedHosts || []);
+  if (self.isHostAllowed(currentHost, [...hosts])) {
+    for (const host of hosts) {
+      if (currentHost === host || currentHost.endsWith(`.${host}`)) hosts.delete(host);
+    }
+  } else {
+    hosts.add(currentHost);
+  }
+  translate.allowedHosts = [...hosts].sort();
+  await saveTranslateSettings(true);
 }
 
 async function saveReplySettings(showToast = false) {
@@ -460,12 +535,18 @@ function sortModels(models, providerId) {
 }
 
 async function saveCredentials() {
-  flushCredentialForm();
-  await chrome.storage.sync.set({ providerConfigs });
-  // 凭据变了，hint 也要刷新
-  updateTranslateProviderHint();
-  updateReplyProviderHint();
-  showStatus(credentialStatus, "已保存", "success", true);
+  try {
+    flushCredentialForm();
+    const cfg = providerConfigs[currentCredentialProviderId];
+    cfg.baseUrl = self.normalizeProviderBaseUrl(cfg.baseUrl);
+    baseUrlInput.value = cfg.baseUrl;
+    await chrome.storage.local.set({ providerConfigs });
+    updateTranslateProviderHint();
+    updateReplyProviderHint();
+    showStatus(credentialStatus, "已保存到本机", "success", true);
+  } catch (error) {
+    showStatus(credentialStatus, error.message, "error");
+  }
 }
 
 /* =========================================================================
@@ -542,8 +623,8 @@ async function deletePersona(id) {
 }
 
 async function resetPersonas() {
-  if (!confirm("恢复为 5 个内置人设？当前自定义人设会被替换。")) return;
   const fallback = Array.isArray(self.DEFAULT_PERSONAS) ? self.DEFAULT_PERSONAS : [];
+  if (!confirm(`恢复为 ${fallback.length} 个内置人设？当前自定义人设会被替换。`)) return;
   personas = [...fallback];
   await chrome.storage.sync.set({ personas });
   renderPersonas();

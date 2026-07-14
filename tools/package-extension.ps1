@@ -8,7 +8,7 @@ $Root = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $Manifest = Get-Content -Raw -Encoding UTF8 (Join-Path $Root "manifest.json") | ConvertFrom-Json
 if (-not $OutDir) { $OutDir = Join-Path $Root "dist" }
 
-$RequiredFiles = @(
+$PackageFiles = @(
   "manifest.json",
   "service-worker.js",
   "shared-utils.js",
@@ -20,23 +20,35 @@ $RequiredFiles = @(
   "popup.js",
   "providers.js",
   "personas.js",
+  "icons/icon-16.png",
+  "icons/icon-32.png",
+  "icons/icon-48.png",
+  "icons/icon-128.png",
   "README.md",
-  "PRIVACY.md"
+  "PRIVACY.md",
+  "LICENSE"
 )
 
-foreach ($Rel in $RequiredFiles) {
+foreach ($Rel in $PackageFiles) {
   if (-not (Test-Path (Join-Path $Root $Rel))) {
     throw "Missing required file: $Rel"
   }
 }
 
 if (Get-Command node -ErrorAction SilentlyContinue) {
-  Get-ChildItem -Path $Root -Filter "*.js" -File | ForEach-Object {
+  Get-ChildItem -Path $Root -Filter "*.js" -File -Recurse |
+    Where-Object { $_.FullName -notmatch '[\\/](\.git|dist|node_modules)[\\/]' } |
+    ForEach-Object {
     & node --check $_.FullName
     if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax check failed: $($_.Name)" }
   }
+  $TestFiles = @(Get-ChildItem -Path (Join-Path $Root "tests") -Filter "*.test.js" -File -ErrorAction SilentlyContinue)
+  if ($TestFiles.Count -gt 0) {
+    & node --test ($TestFiles | ForEach-Object FullName)
+    if ($LASTEXITCODE -ne 0) { throw "JavaScript tests failed" }
+  }
 } else {
-  Write-Warning "node not found; skipped JavaScript syntax check"
+  Write-Warning "node not found; skipped JavaScript syntax checks and tests"
 }
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
@@ -48,22 +60,12 @@ if (Test-Path $Zip) { Remove-Item $Zip -Force }
 $Stage = Join-Path ([IO.Path]::GetTempPath()) "pagelingo-$([guid]::NewGuid())"
 New-Item -ItemType Directory -Force -Path $Stage | Out-Null
 
-$SkipDirs = @(".git", "dist", "node_modules", ".vscode", ".idea")
-$SkipFiles = @("secrets.js")
-$RootPrefix = $Root.TrimEnd("\") + "\"
-
 try {
-  Get-ChildItem -Path $Root -Recurse -File | ForEach-Object {
-    $Rel = $_.FullName.Substring($RootPrefix.Length)
-    $Top = $Rel.Split("\")[0]
-
-    if ($SkipDirs -contains $Top) { return }
-    if ($SkipFiles -contains $_.Name) { return }
-    if ($_.Name -like "*.log" -or $_.Name -like "*.tmp" -or $_.Name -like ".env*") { return }
-
+  foreach ($Rel in $PackageFiles) {
+    $Source = Join-Path $Root $Rel
     $Target = Join-Path $Stage $Rel
     New-Item -ItemType Directory -Force -Path (Split-Path $Target) | Out-Null
-    Copy-Item -LiteralPath $_.FullName -Destination $Target
+    Copy-Item -LiteralPath $Source -Destination $Target
   }
 
   # ponytail: staging keeps archive paths clean; add signing only when store releases need it.

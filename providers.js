@@ -139,11 +139,3 @@ self.PROVIDERS = [
 self.getProvider = function (id) {
   return self.PROVIDERS.find((p) => p.id === id) || self.PROVIDERS[0];
 };
-
-self.getTranslateProviders = function () {
-  return self.PROVIDERS.filter((p) => p.canTranslate);
-};
-
-self.getReplyProviders = function () {
-  return self.PROVIDERS.filter((p) => p.canReply);
-};

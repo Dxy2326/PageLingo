@@ -1,19 +1,15 @@
 /* eslint-disable no-undef */
 
-try { importScripts("shared-utils.js"); } catch (_e) { /* 缺失会让所有功能失效，启动时会报错给用户 */ }
+importScripts("shared-utils.js");
 try { importScripts("secrets.js"); } catch (_e) { self.HELPER_DEEPSEEK_API_KEY = ""; }
-try { importScripts("personas.js"); } catch (_e) { self.DEFAULT_PERSONAS = []; }
-try { importScripts("providers.js"); } catch (_e) {
-  self.PROVIDERS = [];
-  self.getProvider = () => null;
-  self.getTranslateProviders = () => [];
-  self.getReplyProviders = () => [];
-}
+importScripts("personas.js", "providers.js");
+
+chrome.storage.local.setAccessLevel?.({ accessLevel: "TRUSTED_CONTEXTS" })?.catch(() => {});
 
 /* =========================================================================
  *  存储 schema（合并版）
- *  - providerConfigs：所有供应商的凭据（{[id]: { apiKey, model, baseUrl }}）
- *      由翻译和回复共享，避免同一个 Key 填两遍。
+ *  - providerConfigs：所有供应商的凭据，保存在 storage.local。
+ *      翻译和回复共享，避免同一个 Key 填两遍，也不通过浏览器同步。
  *  - translate.{ enabled, providerId, targetLanguage }
  *  - reply.{ providerId, lastPersonaId }
  *  - personas：人设列表
@@ -27,9 +23,10 @@ const STORAGE_KEYS = {
 };
 
 const DEFAULT_TRANSLATE = {
-  enabled: true,
+  enabled: false,
   providerId: "google",
-  targetLanguage: "zh-CN"
+  targetLanguage: "zh-CN",
+  allowedHosts: [...(self.DEFAULT_ALLOWED_HOSTS || ["x.com", "twitter.com", "github.com"])]
 };
 
 const DEFAULT_REPLY = {
@@ -38,7 +35,6 @@ const DEFAULT_REPLY = {
 };
 
 const DEFAULT_SETTINGS = {
-  [STORAGE_KEYS.providerConfigs]: {},
   [STORAGE_KEYS.translate]: DEFAULT_TRANSLATE,
   [STORAGE_KEYS.reply]: DEFAULT_REPLY,
   [STORAGE_KEYS.personas]: []
@@ -52,12 +48,7 @@ const LANGUAGE_NAMES = self.TRANSLATE_LANGUAGE_NAMES || {
 chrome.runtime.onInstalled.addListener(async () => {
   await migrateLegacySettings();
   await mergeDefaultPersonas();
-  // 安装 / 更新后立即预热当前选中的 provider，提升首次点击 AI 回的速度
-  warmUpSelectedProviders();
 });
-
-// service worker 每次冷启动都跑一次（onInstalled 不会触发非首次启动）
-warmUpSelectedProviders();
 
 /**
  * 把 DEFAULT_PERSONAS 里 ID 不存在的人设追加到用户的 personas，
@@ -81,27 +72,28 @@ async function mergeDefaultPersonas() {
  * - 回复旧版：{ providerId, providerConfigs, personas, lastPersonaId }
  */
 async function migrateLegacySettings() {
-  const stored = await chrome.storage.sync.get(null);
-  const haveNew =
-    stored[STORAGE_KEYS.translate] || stored[STORAGE_KEYS.reply] ||
-    (stored[STORAGE_KEYS.providerConfigs] &&
-      Object.keys(stored[STORAGE_KEYS.providerConfigs]).length > 0);
-  if (haveNew) return;
+  const [stored, local] = await Promise.all([
+    chrome.storage.sync.get(null),
+    chrome.storage.local.get([STORAGE_KEYS.providerConfigs])
+  ]);
+  const haveLocalConfigs = Object.prototype.hasOwnProperty.call(local, STORAGE_KEYS.providerConfigs);
+  const providerConfigs = haveLocalConfigs
+    ? local[STORAGE_KEYS.providerConfigs] || {}
+    : stored[STORAGE_KEYS.providerConfigs] || {};
 
-  const providerConfigs = {};
-  let translate = { ...DEFAULT_TRANSLATE };
-  let reply = { ...DEFAULT_REPLY };
+  let translate = stored[STORAGE_KEYS.translate] || { ...DEFAULT_TRANSLATE };
+  let reply = stored[STORAGE_KEYS.reply] || { ...DEFAULT_REPLY };
+  const hasLegacyTranslate = stored.provider || stored.apiBaseUrl || stored.targetLanguage || stored.apiKey;
 
-  // 翻译旧版
-  if (stored.provider || stored.apiBaseUrl || stored.targetLanguage) {
+  if (!stored[STORAGE_KEYS.translate] && hasLegacyTranslate) {
     const oldProvider = stored.provider || "google";
-    // 翻译旧 ID 映射到合并版 ID
     const map = { google: "google", deepseek: "deepseek", openai: "openai", claude: "anthropic", gemini: "gemini", custom: "custom" };
     const newId = map[oldProvider] || "google";
     translate = {
       enabled: typeof stored.enabled === "boolean" ? stored.enabled : true,
       providerId: newId,
-      targetLanguage: stored.targetLanguage || "zh-CN"
+      targetLanguage: stored.targetLanguage || "zh-CN",
+      allowedHosts: [...DEFAULT_TRANSLATE.allowedHosts]
     };
     if (newId !== "google" && stored.apiKey) {
       providerConfigs[newId] = {
@@ -112,24 +104,29 @@ async function migrateLegacySettings() {
     }
   }
 
-  // 回复旧版（如果两边在同一个浏览器装过）
-  if (stored.providerConfigs && typeof stored.providerConfigs === "object") {
-    for (const [pid, cfg] of Object.entries(stored.providerConfigs)) {
-      if (!providerConfigs[pid]) providerConfigs[pid] = cfg;
-    }
-  }
-  if (stored.providerId) {
+  if (!stored[STORAGE_KEYS.reply] && stored.providerId) {
     reply = {
       providerId: stored.providerId,
       lastPersonaId: stored.lastPersonaId || "crypto-og"
     };
   }
 
+  translate = {
+    ...DEFAULT_TRANSLATE,
+    ...translate,
+    allowedHosts: Array.isArray(translate.allowedHosts) ? translate.allowedHosts : [...DEFAULT_TRANSLATE.allowedHosts]
+  };
+  await chrome.storage.local.set({ [STORAGE_KEYS.providerConfigs]: providerConfigs });
+  await chrome.storage.local.remove("xhlpCache");
   await chrome.storage.sync.set({
-    [STORAGE_KEYS.providerConfigs]: providerConfigs,
     [STORAGE_KEYS.translate]: translate,
     [STORAGE_KEYS.reply]: reply
   });
+  await chrome.storage.sync.remove([
+    STORAGE_KEYS.providerConfigs,
+    "enabled", "provider", "apiKey", "apiBaseUrl", "model", "targetLanguage",
+    "providerId", "lastPersonaId"
+  ]);
 }
 
 /* =========================================================================
@@ -138,25 +135,28 @@ async function migrateLegacySettings() {
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   switch (message?.type) {
     case "translateTweet":
-      translateTweet(message.text, message.targetLanguage, message.forceRefresh, { profile: "x" })
+      ensureTranslationAllowed(_sender, message)
+        .then(() => translateTweet(message.text, message.targetLanguage, message.forceRefresh, { profile: "x" }))
         .then((result) => sendResponse({ ok: true, ...result }))
         .catch((error) => sendResponse({ ok: false, error: error.message }));
       return true;
 
     case "translateText":
-      translateTweet(message.text, message.targetLanguage, message.forceRefresh, {
-        profile: message.profile || "web",
-        url: message.url || ""
-      })
+      ensureTranslationAllowed(_sender, message)
+        .then(() => translateTweet(message.text, message.targetLanguage, message.forceRefresh, {
+          profile: message.profile || "web",
+          url: message.url || ""
+        }))
         .then((result) => sendResponse({ ok: true, ...result }))
         .catch((error) => sendResponse({ ok: false, error: error.message }));
       return true;
 
     case "translateBatch":
-      translateBatch(message.texts, message.targetLanguage, message.forceRefresh, {
-        profile: message.profile || "x",
-        url: message.url || ""
-      })
+      ensureTranslationAllowed(_sender, message)
+        .then(() => translateBatch(message.texts, message.targetLanguage, message.forceRefresh, {
+          profile: message.profile || "x",
+          url: message.url || ""
+        }))
         .then((results) => sendResponse({ ok: true, results }))
         .catch((error) => sendResponse({ ok: false, error: error.message }));
       return true;
@@ -184,12 +184,6 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         .then((models) => sendResponse({ ok: true, models }))
         .catch((error) => sendResponse({ ok: false, error: error.message }));
       return true;
-
-    case "warmUp":
-      // hover 预热的轻量 ping：唤醒 SW + 触发 TLS 预连。立即 ack，不等任何网络。
-      warmUpSelectedProviders();
-      sendResponse({ ok: true });
-      return false;
 
     default:
       return false;
@@ -246,10 +240,19 @@ let rootCachePromise = null;
 async function getRoot() {
   if (rootCache) return rootCache;
   if (rootCachePromise) return rootCachePromise;
-  rootCachePromise = chrome.storage.sync.get(DEFAULT_SETTINGS).then((r) => {
-    rootCache = r;
+  rootCachePromise = Promise.all([
+    chrome.storage.sync.get({ ...DEFAULT_SETTINGS, [STORAGE_KEYS.providerConfigs]: {} }),
+    chrome.storage.local.get([STORAGE_KEYS.providerConfigs])
+  ]).then(([syncRoot, localRoot]) => {
+    const haveLocalConfigs = Object.prototype.hasOwnProperty.call(localRoot, STORAGE_KEYS.providerConfigs);
+    rootCache = {
+      ...syncRoot,
+      [STORAGE_KEYS.providerConfigs]: haveLocalConfigs
+        ? localRoot[STORAGE_KEYS.providerConfigs] || {}
+        : syncRoot[STORAGE_KEYS.providerConfigs] || {}
+    };
     rootCachePromise = null;
-    return r;
+    return rootCache;
   }).catch((e) => {
     rootCachePromise = null;
     throw e;
@@ -258,75 +261,51 @@ async function getRoot() {
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "sync" || !rootCache) return;
-  // 把变更的键 patch 到内存里。删除走 newValue=undefined。
-  for (const [key, { newValue }] of Object.entries(changes)) {
-    if (newValue === undefined) delete rootCache[key];
-    else rootCache[key] = newValue;
+  if (rootCache) {
+    if (area === "sync") {
+      for (const [key, { newValue }] of Object.entries(changes)) {
+        if (key === STORAGE_KEYS.providerConfigs) continue;
+        if (newValue === undefined) delete rootCache[key];
+        else rootCache[key] = newValue;
+      }
+    } else if (area === "local" && changes[STORAGE_KEYS.providerConfigs]) {
+      rootCache[STORAGE_KEYS.providerConfigs] = changes[STORAGE_KEYS.providerConfigs].newValue || {};
+    }
   }
-  // 用户切换了 provider 或改了凭据时，重新预热
-  if (changes[STORAGE_KEYS.translate] || changes[STORAGE_KEYS.reply] || changes[STORAGE_KEYS.providerConfigs]) {
-    warmedHosts.clear();
-    warmUpSelectedProviders();
+  if (
+    (area === "sync" && changes[STORAGE_KEYS.translate]) ||
+    (area === "local" && changes[STORAGE_KEYS.providerConfigs])
+  ) {
+    translateCache.clear();
+    inflightRequests.clear();
   }
 });
 
-/* =========================================================================
- *  连接预热
- *  service worker 启动 / 用户切换 provider 后，发一次轻量请求让 TLS / DNS 暖起来。
- *  失败完全不影响功能（只是预热没成功）。
- * ========================================================================= */
-const warmedHosts = new Set();
-async function warmUpProvider(providerId) {
-  if (!providerId || providerId === "google") return;
-  try {
-    const root = await getRoot();
-    const cfg = (root[STORAGE_KEYS.providerConfigs] || {})[providerId] || {};
-    const provider = self.getProvider(providerId);
-    if (!provider) return;
-    const baseUrl = (cfg.baseUrl || provider.baseUrl || "").replace(/\/+$/, "");
-    if (!baseUrl) return;
-    const host = new URL(baseUrl).host;
-    if (warmedHosts.has(host)) return;
-    warmedHosts.add(host);
-    // OPTIONS 通常更轻量；多数 LLM 网关会返回 200 / 204 / 405 都行，关键是建立 TLS
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), 3000);
-    try {
-      await fetch(baseUrl, { method: "OPTIONS", signal: ctrl.signal, cache: "no-store" });
-    } catch (_e) { /* ignore：连不上也不影响真正请求 */ }
-    finally { clearTimeout(timer); }
-  } catch (_e) { /* ignore */ }
-}
-
-/**
- * Service worker 启动时调一次（onInstalled + 首次 getRoot 后），
- * 把当前选中的回复 / 翻译 provider 都预热。
- */
-async function warmUpSelectedProviders() {
-  try {
-    const root = await getRoot();
-    const tProvider = (root[STORAGE_KEYS.translate] || DEFAULT_TRANSLATE).providerId;
-    const rProvider = (root[STORAGE_KEYS.reply] || DEFAULT_REPLY).providerId;
-    // 并行预热，不互相阻塞
-    Promise.allSettled([warmUpProvider(tProvider), warmUpProvider(rProvider)]);
-  } catch (_e) { /* ignore */ }
+async function ensureTranslationAllowed(sender, message) {
+  if (message.explicit || !sender?.tab) return;
+  const root = await getRoot();
+  const settings = { ...DEFAULT_TRANSLATE, ...(root[STORAGE_KEYS.translate] || {}) };
+  const host = safeHost(sender.tab.url || sender.url || "");
+  if (!settings.enabled || !self.isHostAllowed(host, settings.allowedHosts)) {
+    throw new Error("当前网站未启用翻译");
+  }
 }
 
 /**
  * 取某个 providerId 的实际配置（合并默认值 + 用户填的）。
- * 如果是 deepseek 且用户没填 Key，会回落到 secrets.js 里的 fallback Key。
+ * 如果是 deepseek 且用户没填 Key，本地开发可回落到未打包的 secrets.js。
  */
 function resolveProviderConfig(providerId, providerConfigs) {
   const provider = self.getProvider(providerId);
   if (!provider) throw new Error(`未知供应商：${providerId}`);
   const cfg = (providerConfigs && providerConfigs[providerId]) || {};
   const fallbackKey = providerId === "deepseek" ? self.HELPER_DEEPSEEK_API_KEY || "" : "";
+  const baseUrl = cfg.baseUrl || provider.baseUrl || "";
   return {
     provider,
     apiKey: cfg.apiKey || fallbackKey,
     model: cfg.model || provider.defaultModel,
-    baseUrl: (cfg.baseUrl || provider.baseUrl || "").replace(/\/+$/, "")
+    baseUrl: baseUrl ? self.normalizeProviderBaseUrl(baseUrl) : ""
   };
 }
 
@@ -336,32 +315,8 @@ function resolveProviderConfig(providerId, providerConfigs) {
  * ========================================================================= */
 
 const translateCache = new Map();
-const MAX_CACHE_ENTRIES = 2000;
-let cacheLoaded = false;
+const MAX_CACHE_ENTRIES = 1000;
 const inflightRequests = new Map();
-let saveTimer = null;
-
-loadCacheFromStorage();
-
-async function loadCacheFromStorage() {
-  try {
-    const data = await chrome.storage.local.get("xhlpCache");
-    const arr = data?.xhlpCache;
-    if (Array.isArray(arr)) {
-      for (const [k, v] of arr) translateCache.set(k, v);
-    }
-  } catch (_e) { /* ignore */ }
-  cacheLoaded = true;
-}
-
-function saveCacheToStorage() {
-  if (saveTimer) return;
-  saveTimer = setTimeout(() => {
-    saveTimer = null;
-    const arr = Array.from(translateCache.entries());
-    chrome.storage.local.set({ xhlpCache: arr }).catch(() => {});
-  }, 5000);
-}
 
 function trimCache() {
   if (translateCache.size <= MAX_CACHE_ENTRIES) return;
@@ -375,7 +330,7 @@ function trimCache() {
 
 async function translateTweet(text, targetLanguage, forceRefresh = false, options = {}) {
   const normalizedText = String(text || "").trim();
-  if (!normalizedText) return { translatedText: "", providerLabel: "", fellBack: false };
+  if (!normalizedText) return { translatedText: "", providerLabel: "" };
 
   const root = await getRoot();
   const t = root[STORAGE_KEYS.translate] || DEFAULT_TRANSLATE;
@@ -385,9 +340,8 @@ async function translateTweet(text, targetLanguage, forceRefresh = false, option
   const providerId = t.providerId || "google";
   const resolved = resolveProviderConfig(providerId, providerConfigs);
   const profile = normalizeTranslateProfile(options.profile, options.url);
-  const cacheKey = `${providerId}:${resolved.model}:${language}:${profile}:${normalizedText}`;
+  const cacheKey = `v2:${providerId}:${resolved.model}:${resolved.baseUrl}:${language}:${profile}:${normalizedText}`;
 
-  if (!cacheLoaded) await loadCacheFromStorage();
   if (!forceRefresh && translateCache.has(cacheKey)) return translateCache.get(cacheKey);
   if (!forceRefresh && inflightRequests.has(cacheKey)) return inflightRequests.get(cacheKey);
 
@@ -401,51 +355,37 @@ async function translateTweet(text, targetLanguage, forceRefresh = false, option
 }
 
 /**
- * 批量翻译。content script 给一组文本 → 后台并行 fan out → 结果按原顺序返回。
+ * 批量翻译。每批最多并发 4 条，避免网页扫描瞬间打满供应商限流。
  * 单条失败用 ok:false 报错占位，不影响其它条。
  */
 async function translateBatch(texts, targetLanguage, forceRefresh = false, options = {}) {
   if (!Array.isArray(texts) || texts.length === 0) return [];
-  const settled = await Promise.allSettled(
-    texts.map((t) => translateTweet(t, targetLanguage, forceRefresh, options))
-  );
-  return settled.map((s) =>
-    s.status === "fulfilled"
-      ? { ok: true, ...s.value }
-      : { ok: false, error: s.reason?.message || String(s.reason) }
-  );
+  if (texts.length > 32) throw new Error("单次批量翻译最多 32 条");
+  const results = [];
+  for (let index = 0; index < texts.length; index += 4) {
+    const settled = await Promise.allSettled(
+      texts.slice(index, index + 4).map((text) => translateTweet(text, targetLanguage, forceRefresh, options))
+    );
+    results.push(...settled.map((item) =>
+      item.status === "fulfilled"
+        ? { ok: true, ...item.value }
+        : { ok: false, error: item.reason?.message || String(item.reason) }
+    ));
+  }
+  return results;
 }
 
 async function doTranslate(text, language, providerId, resolved, cacheKey, profile = "x") {
   let translated = "";
-  let actualProvider = providerId;
-  let actualModel = resolved.model || "";
-  let fellBack = false;
 
-  try {
-    if (providerId === "google") {
-      translated = await translateWithGoogle(text, language);
-      actualModel = "";
-    } else if (!resolved.apiKey) {
-      // 没填 Key 自动降级到 Google
-      translated = await translateWithGoogle(text, language);
-      actualProvider = "google";
-      actualModel = "";
-      fellBack = true;
-    } else if (resolved.provider.api === "anthropic") {
-      translated = await translateWithClaude(text, language, resolved, profile);
-    } else {
-      translated = await translateWithOpenAICompat(text, language, resolved, profile);
-    }
-  } catch (error) {
-    if (providerId !== "google") {
-      translated = await translateWithGoogle(text, language);
-      actualProvider = "google";
-      actualModel = "";
-      fellBack = true;
-    } else {
-      throw error;
-    }
+  if (providerId === "google") {
+    translated = await translateWithGoogle(text, language);
+  } else if (!resolved.apiKey) {
+    throw new Error(`${resolved.provider.name} API Key 为空`);
+  } else if (resolved.provider.api === "anthropic") {
+    translated = await translateWithClaude(text, language, resolved, profile);
+  } else {
+    translated = await translateWithOpenAICompat(text, language, resolved, profile);
   }
 
   translated = postProcessTranslation(translated, text);
@@ -453,13 +393,11 @@ async function doTranslate(text, language, providerId, resolved, cacheKey, profi
 
   const result = {
     translatedText: translated,
-    providerLabel: providerLabelOf(actualProvider),
-    providerTooltip: actualModel ? `${providerLabelOf(actualProvider)} · ${actualModel}` : providerLabelOf(actualProvider),
-    fellBack
+    providerLabel: providerLabelOf(providerId),
+    providerTooltip: resolved.model ? `${providerLabelOf(providerId)} · ${resolved.model}` : providerLabelOf(providerId)
   };
   translateCache.set(cacheKey, result);
   trimCache();
-  saveCacheToStorage();
   return result;
 }
 
@@ -476,7 +414,7 @@ function normalizeTranslateProfile(profile, url = "") {
 }
 
 function safeHost(url) {
-  try { return new URL(url).host; } catch (_e) { return ""; }
+  try { return new URL(url).hostname; } catch (_e) { return ""; }
 }
 
 function isRefusal(text) {
@@ -1183,8 +1121,9 @@ async function listModels(providerId, apiKey, baseUrl) {
 
   if (!apiKey) throw new Error("请先填入 API Key");
 
-  const base = (baseUrl || provider.baseUrl || "").replace(/\/+$/, "");
-  if (!base) throw new Error("请先填入 Base URL");
+  const rawBase = baseUrl || provider.baseUrl || "";
+  if (!rawBase) throw new Error("请先填入 Base URL");
+  const base = self.normalizeProviderBaseUrl(rawBase);
 
   if (provider.api === "anthropic") {
     const response = await fetchWithRetry(`${base}/models?limit=1000`, {

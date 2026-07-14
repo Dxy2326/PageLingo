@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "PageLingo",
   "description": "多站点网页翻译助手：优化 X / Twitter、GitHub 和常用英文网页翻译，并保留 X AI 回复草稿能力。",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "permissions": ["storage", "clipboardWrite"],
   "icons": {
     "16": "icons/icon-16.png",
@@ -10,24 +10,7 @@
     "48": "icons/icon-48.png",
     "128": "icons/icon-128.png"
   },
-  "host_permissions": [
-    "https://x.com/*",
-    "https://*.x.com/*",
-    "https://twitter.com/*",
-    "https://*.twitter.com/*",
-    "https://*/*",
-    "http://*/*",
-    "https://translate.googleapis.com/*",
-    "https://api.deepseek.com/*",
-    "https://api.openai.com/*",
-    "https://api.anthropic.com/*",
-    "https://generativelanguage.googleapis.com/*",
-    "https://openrouter.ai/*",
-    "https://api.groq.com/*"
-  ],
-  "optional_host_permissions": [
-    "https://*/*"
-  ],
+  "host_permissions": ["https://*/*", "http://*/*"],
   "background": {
     "service_worker": "service-worker.js"
   },
@@ -53,7 +36,7 @@
         "https://twitter.com/*",
         "https://*.twitter.com/*"
       ],
-      "js": ["site-profiles.js", "web-translator.js"],
+      "js": ["shared-utils.js", "site-profiles.js", "web-translator.js"],
       "run_at": "document_idle"
     }
   ],

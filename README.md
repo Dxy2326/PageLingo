@@ -5,7 +5,7 @@ PageLingo 是一个 Chrome / Edge 扩展，用来在浏览网页时直接显示�
 它针对三个场景做了优化：X / Twitter 的推文流、GitHub 的技术讨论和 README，以及常见英文网页正文。X 场景还保留了 AI 回复草稿能力，但不会自动发送任何内容。
 
 [![Manifest V3](https://img.shields.io/badge/Manifest-V3-brightgreen.svg)](manifest.json)
-![Version](https://img.shields.io/badge/version-1.0.0-orange.svg)
+![Version](https://img.shields.io/badge/version-1.1.0-orange.svg)
 
 ## 功能概览
 
@@ -13,7 +13,8 @@ PageLingo 是一个 Chrome / Edge 扩展，用来在浏览网页时直接显示�
 
 - 自动翻译 X / Twitter 外文推文、长文和引用内容
 - 自动翻译 GitHub README、Issue、PR、Release、Discussion 等正文
-- 自动翻译常见英文网页的正文区域
+- 新安装默认关闭翻译，只在用户允许的网站处理正文
+- 默认允许 X / Twitter 和 GitHub，其他网站可从扩展弹窗加入允许列表
 - 避开代码块、输入框、按钮、导航栏和隐藏内容
 - 支持折叠译文、复制译文、重新翻译
 - 默认使用 Google 免费翻译，也可切换到 LLM 翻译
@@ -41,7 +42,7 @@ GitHub 内容会使用单独的技术翻译风格：
 ### 方式一：下载发布包
 
 1. 打开仓库的 `Releases` 页面
-2. 下载 `PageLingo-1.0.0.zip`
+2. 下载最新版本的 `PageLingo-*.zip`
 3. 解压 ZIP
 4. 打开 Chrome / Edge 的扩展管理页：`chrome://extensions/`
 5. 开启「开发者模式」
@@ -79,7 +80,7 @@ git clone https://github.com/Dxy2326/PageLingo.git
 powershell -ExecutionPolicy Bypass -File .\tools\package-extension.ps1
 ```
 
-脚本会先检查必需文件和 JavaScript 语法，再生成 `dist/PageLingo-1.0.0.zip`。
+脚本会先运行测试、检查必需文件和 JavaScript 语法，再生成 `dist/PageLingo-<version>.zip`。
 
 发布包会自动排除 `.git`、`dist`、`node_modules`、编辑器目录和本机 `secrets.js`。
 
@@ -89,12 +90,12 @@ powershell -ExecutionPolicy Bypass -File .\tools\package-extension.ps1
 
 | 页面 | 用途 |
 |---|---|
-| 翻译 | 开关、翻译供应商、目标语言 |
+| 翻译 | 开关、允许的网站、翻译供应商、目标语言 |
 | 回复 | X 回复使用的模型供应商 |
 | 凭据 | API Key、模型名、Base URL |
 | 人设 | X 回复的人设管理 |
 
-翻译默认走 Google 免费翻译，不需要 API Key。
+新安装默认关闭翻译。开启后，Google 免费翻译不需要 API Key；选择 LLM 时必须配置对应 Key，失败不会自动转发给 Google。
 
 如果要使用 LLM 翻译或 AI 回复，需要在「凭据」里配置对应供应商。
 
@@ -115,9 +116,9 @@ powershell -ExecutionPolicy Bypass -File .\tools\package-extension.ps1
 
 PageLingo 需要在网页中读取可见文本，才能把正文发送给翻译接口并把译文插回页面。
 
-当前版本会请求较宽的网站访问权限，以支持通用网页翻译。浏览器可能因此在扩展管理页显示权限警告。后续可以改成「默认只启用 X / GitHub，其他网站按需授权」的模式来减少权限提示。
+当前版本仍会请求较宽的网站访问权限，以便静态内容脚本支持通用网页。浏览器可能因此显示权限警告，但扩展新安装时不会翻译；只有同时开启翻译并允许当前网站后，正文才会发送给所选供应商。
 
-API Key 存在浏览器的 `chrome.storage.sync` 中。不要把包含真实 Key 的文件提交到仓库。
+API Key 存在本机的 `chrome.storage.local` 中，不通过浏览器同步。远程 API Base URL 必须使用 HTTPS；仅 localhost 允许 HTTP。
 
 更完整的数据说明见 [PRIVACY.md](PRIVACY.md)。
 
@@ -156,6 +157,7 @@ PageLingo/
 - 不同网站 DOM 差异很大，通用网页翻译不可能一次覆盖所有页面
 - X 页面结构变化时，可能需要更新 `x-content.js` 的选择器
 - Google 免费翻译适合轻量使用，复杂技术内容建议配置 LLM 翻译
+- 翻译缓存只保留在当前后台进程内，浏览器重启后会清空
 - 浏览器扩展里的 API Key 无法做到绝对保密，请只使用可控额度的 Key
 
 ## License

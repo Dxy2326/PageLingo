@@ -44,7 +44,11 @@ const TONES = [
 ];
 
 const state = {
-  translate: { enabled: true, targetLanguage: "zh-CN" },
+  translate: {
+    enabled: false,
+    targetLanguage: "zh-CN",
+    allowedHosts: [...(self.DEFAULT_ALLOWED_HOSTS || ["x.com", "twitter.com", "github.com"])]
+  },
   reply: { lastPersonaId: "crypto-og", lastToneId: "neutral" },
   personas: FALLBACK_PERSONAS.slice()
 };
@@ -55,6 +59,7 @@ let scanTimer = null;
 const queue = [];
 let activeWorkers = 0;
 const pendingTasks = new WeakMap();
+let translationGeneration = 0;
 
 init();
 
@@ -135,17 +140,19 @@ async function init() {
 
     if (changes.translate) {
       const next = changes.translate.newValue || {};
-      const prev = changes.translate.oldValue || {};
+      const prev = state.translate;
+      const wasEnabled = isTranslationEnabled(prev);
       state.translate = { ...state.translate, ...next };
-      if (prev.enabled !== next.enabled || prev.targetLanguage !== next.targetLanguage || prev.providerId !== next.providerId) {
+      const enabled = isTranslationEnabled(state.translate);
+      if (
+        wasEnabled !== enabled ||
+        prev.targetLanguage !== state.translate.targetLanguage ||
+        prev.providerId !== state.translate.providerId ||
+        JSON.stringify(prev.allowedHosts || []) !== JSON.stringify(state.translate.allowedHosts || [])
+      ) {
         needClearTr = true;
-        needRescan = !!state.translate.enabled;
+        needRescan = enabled;
       }
-    }
-    if (changes.providerConfigs) {
-      // 凭据变了，清掉旧译文
-      needClearTr = true;
-      needRescan = !!state.translate.enabled;
     }
     if (changes.reply) {
       state.reply = { ...state.reply, ...(changes.reply.newValue || {}) };
@@ -218,7 +225,7 @@ function scheduleScan(delay) {
 function scanTweets() {
   const tweets = document.querySelectorAll(TWEET_SELECTOR);
   for (const tweet of tweets) {
-    if (state.translate.enabled) enqueueTweetForTranslation(tweet);
+    if (isTranslationEnabled()) enqueueTweetForTranslation(tweet);
     attachReplyButton(tweet);
   }
   drainQueue();
@@ -275,7 +282,8 @@ function drainQueue() {
 }
 
 async function translateOne({ tweet, textNode, text }, forceRefresh = false) {
-  const placeholder = insertTranslationBlock(textNode, "翻译中…", "loading", "", false, "");
+  const generation = translationGeneration;
+  const placeholder = insertTranslationBlock(textNode, "翻译中…", "loading", "", "");
   tweet.setAttribute(TRANSLATED_ATTR, "loading");
 
   try {
@@ -286,6 +294,10 @@ async function translateOne({ tweet, textNode, text }, forceRefresh = false) {
       forceRefresh
     });
     if (!response?.ok) throw new Error(response?.error || "未知错误");
+    if (generation !== translationGeneration || !isTranslationEnabled()) {
+      placeholder.remove();
+      return;
+    }
 
     const translated = (response.translatedText || "").trim();
     if (!translated || translated === text) {
@@ -294,17 +306,21 @@ async function translateOne({ tweet, textNode, text }, forceRefresh = false) {
       return;
     }
 
-    renderTranslation(placeholder, translated, "ok", response.providerLabel || "", response.fellBack || false, response.providerTooltip || "");
+    renderTranslation(placeholder, translated, "ok", response.providerLabel || "", response.providerTooltip || "");
     bindTranslationToolsHandlers(placeholder, { tweet, textNode, text });
     tweet.setAttribute(TRANSLATED_ATTR, "done");
   } catch (error) {
-    renderTranslation(placeholder, `翻译失败：${error.message || error}`, "error", "", false, "");
+    if (generation !== translationGeneration || !isTranslationEnabled()) {
+      placeholder.remove();
+      return;
+    }
+    renderTranslation(placeholder, `翻译失败：${error.message || error}`, "error", "", "");
     bindTranslationToolsHandlers(placeholder, { tweet, textNode, text });
     tweet.setAttribute(TRANSLATED_ATTR, "error");
   }
 }
 
-function insertTranslationBlock(textNode, message, statusType, providerLabel, fellBack, providerTooltip) {
+function insertTranslationBlock(textNode, message, statusType, providerLabel, providerTooltip) {
   const existing = findExistingTranslation(textNode);
   if (existing) existing.remove();
 
@@ -313,7 +329,8 @@ function insertTranslationBlock(textNode, message, statusType, providerLabel, fe
   block.setAttribute("data-state", statusType);
   block.setAttribute("dir", "auto");
 
-  const label = document.createElement("span");
+  const label = document.createElement("button");
+  label.type = "button";
   label.className = `${TRANSLATION_CLASS}-label`;
   label.textContent = "译文";
   label.title = "点击折叠/展开译文";
@@ -328,10 +345,6 @@ function insertTranslationBlock(textNode, message, statusType, providerLabel, fe
   provider.className = `${TRANSLATION_CLASS}-provider`;
   provider.textContent = providerLabel || "";
   if (providerTooltip) provider.title = providerTooltip;
-  if (fellBack) {
-    provider.setAttribute("data-fellback", "true");
-    provider.title = "上游 API 不可用，已降级到 Google 免费翻译";
-  }
   block.appendChild(provider);
 
   const tools = document.createElement("span");
@@ -359,21 +372,15 @@ function insertTranslationBlock(textNode, message, statusType, providerLabel, fe
   return block;
 }
 
-function renderTranslation(block, text, statusType, providerLabel, fellBack, providerTooltip) {
+function renderTranslation(block, text, statusType, providerLabel, providerTooltip) {
   block.setAttribute("data-state", statusType);
   const content = block.querySelector(`.${TRANSLATION_CLASS}-text`);
   if (content) content.textContent = text;
   const provider = block.querySelector(`.${TRANSLATION_CLASS}-provider`);
   if (provider) {
     provider.textContent = providerLabel || "";
-    if (fellBack) {
-      provider.setAttribute("data-fellback", "true");
-      provider.title = "上游 API 不可用，已降级到 Google 免费翻译";
-    } else {
-      provider.removeAttribute("data-fellback");
-      if (providerTooltip) provider.title = providerTooltip;
-      else provider.removeAttribute("title");
-    }
+    if (providerTooltip) provider.title = providerTooltip;
+    else provider.removeAttribute("title");
   }
 }
 
@@ -430,6 +437,10 @@ function findExistingTranslation(textNode) {
 function extractTweetText(container) {
   const raw = container.innerText || container.textContent || "";
   return raw.replace(/\s+\n/g, "\n").trim();
+}
+
+function isTranslationEnabled(settings = state.translate) {
+  return !!settings.enabled && self.isHostAllowed(location.hostname, settings.allowedHosts);
 }
 
 function extractPrimaryTweetContent(tweet) {
@@ -517,17 +528,12 @@ function shouldTranslate(text) {
   const nonCjkLetters = latin + cyrillic + kana + hangul;
   if (cjk === 0 && nonCjkLetters === 0) return false;
 
-  const targetIsChinese = /^zh/i.test(state.translate.targetLanguage || "");
-  if (targetIsChinese) {
-    if (cjk >= 3 && cjk >= nonCjkLetters) return false;
-    if (cjk > 0 && cjk / (cjk + nonCjkLetters) >= 0.5) return false;
-  } else {
-    if (cjk > 0 && cjk / (cjk + nonCjkLetters) >= 0.7) return false;
-  }
-  return true;
+  if (cjk + nonCjkLetters === 0) return false;
+  return !self.isLikelyTargetLanguage(text, state.translate.targetLanguage);
 }
 
 function clearAllTranslations() {
+  translationGeneration += 1;
   document.querySelectorAll(`.${TRANSLATION_CLASS}`).forEach((el) => el.remove());
   document.querySelectorAll(`[${TRANSLATED_ATTR}]`).forEach((el) => {
     el.removeAttribute(TRANSLATED_ATTR);
@@ -578,21 +584,6 @@ function attachReplyButton(tweet) {
     event.stopPropagation();
     event.preventDefault();
     toggleReplyPanel(tweet);
-  });
-
-  // hover 预热：鼠标停在按钮上 200ms 后给后台发一个空 ping，
-  // 触发 service worker 冷启动 + provider TLS 预连。
-  // 用户接下来点击时，SW 已经醒了，省掉 ~100~300ms 冷启动延迟。
-  let warmTimer = null;
-  btn.addEventListener("mouseenter", () => {
-    if (warmTimer) return;
-    warmTimer = setTimeout(() => {
-      warmTimer = null;
-      try { chrome.runtime.sendMessage({ type: "warmUp" }).catch(() => {}); } catch (_e) { /* ignore */ }
-    }, 200);
-  });
-  btn.addEventListener("mouseleave", () => {
-    if (warmTimer) { clearTimeout(warmTimer); warmTimer = null; }
   });
 
   actionBar.appendChild(btn);
@@ -683,6 +674,8 @@ function buildReplyPanel({ tweet, tweetText, author, language, translation, quot
   const panel = document.createElement("div");
   panel.className = REPLY_PANEL_CLASS;
   panel.setAttribute("dir", "auto");
+  panel.setAttribute("role", "region");
+  panel.setAttribute("aria-label", "PageLingo 回复草稿");
 
   // 上下文徽章：显示模型这次能看到哪些额外信号（译文 / 引文）
   const contextBadges = [];
@@ -698,22 +691,22 @@ function buildReplyPanel({ tweet, tweetText, author, language, translation, quot
   // 语气 chips：与人设正交，决定整体倾向
   const currentToneId = state.reply.lastToneId || "neutral";
   const toneChipsHtml = TONES.map((t) => `
-    <button type="button" class="xh-tone${t.id === currentToneId ? " is-active" : ""}" data-tone="${t.id}" title="${escapeHtml(t.desc)}">${t.name}</button>
+    <button type="button" class="xh-tone${t.id === currentToneId ? " is-active" : ""}" data-tone="${t.id}" aria-pressed="${t.id === currentToneId}" title="${escapeHtml(t.desc)}">${t.name}</button>
   `).join("");
 
   panel.innerHTML = `
     <div class="xh-row">
       <label class="xh-label">人设</label>
-      <select class="xh-persona"></select>
+      <select class="xh-persona" aria-label="回复人设"></select>
       <span class="xh-lang">${LANG_LABEL[language] || language}</span>
-      <button type="button" class="xh-close" title="关闭">×</button>
+      <button type="button" class="xh-close" title="关闭" aria-label="关闭回复草稿面板">×</button>
     </div>
     <div class="xh-row xh-tone-row">
       <label class="xh-label">语气</label>
       <div class="xh-tones">${toneChipsHtml}</div>
     </div>
     ${badgesHtml}
-    <textarea class="xh-extra" rows="1" placeholder="（可选）本条回复的额外要求，例如：带一点反问 / 贴一个具体例子"></textarea>
+    <textarea class="xh-extra" rows="1" aria-label="本条回复的额外要求" placeholder="（可选）本条回复的额外要求，例如：带一点反问 / 贴一个具体例子"></textarea>
     <div class="xh-row">
       <button type="button" class="xh-generate">生成 3 条</button>
       <button type="button" class="xh-regenerate xh-secondary" disabled>再来一组</button>
@@ -729,7 +722,11 @@ function buildReplyPanel({ tweet, tweetText, author, language, translation, quot
   const toneButtons = Array.from(panel.querySelectorAll(".xh-tone"));
   toneButtons.forEach((btn) => {
     btn.addEventListener("click", () => {
-      toneButtons.forEach((b) => b.classList.toggle("is-active", b === btn));
+      toneButtons.forEach((b) => {
+        const active = b === btn;
+        b.classList.toggle("is-active", active);
+        b.setAttribute("aria-pressed", String(active));
+      });
       const toneId = btn.dataset.tone;
       state.reply.lastToneId = toneId;
       chrome.storage.sync.set({ reply: { ...state.reply, lastToneId: toneId } });
@@ -901,12 +898,14 @@ function renderReplyResults(container, replies, tweet, sourceLanguage) {
         await fillReply(tweet, reply);
         btn.textContent = copied ? "已复制并填入" : "已填入";
       } catch (error) {
-        btn.textContent = copied ? "仅复制成功" : "失败";
+        btn.textContent = copied ? "仅复制，未覆盖" : "未填入";
+        btn.title = error.message || "填入失败";
         console.warn("[xh] fillReply error", error);
       } finally {
         setTimeout(() => {
           btn.disabled = false;
           btn.textContent = "复制并填入";
+          btn.removeAttribute("title");
         }, 1600);
       }
     });
@@ -921,7 +920,8 @@ function renderReplyResults(container, replies, tweet, sourceLanguage) {
       type: "translateBatch",
       texts: replies,
       targetLanguage: "zh-CN",
-      forceRefresh: false
+      forceRefresh: false,
+      explicit: true
     }).then((response) => {
       if (!response?.ok || !Array.isArray(response.results)) {
         // batch 整体失败，把所有 loading 行收掉
@@ -946,47 +946,39 @@ function renderReplyResults(container, replies, tweet, sourceLanguage) {
 }
 
 async function fillReply(tweet, text) {
+  const selector = '[data-testid="tweetTextarea_0"], div[role="textbox"][contenteditable="true"]';
+  const existingEditors = new Set(document.querySelectorAll(selector));
   const replyBtn = tweet.querySelector('[data-testid="reply"]');
-  if (replyBtn) replyBtn.click();
+  if (!replyBtn) throw new Error("没找到这条推文的回复按钮");
+  replyBtn.click();
 
-  const editor = await waitForComposer(5000);
+  const editor = await waitForComposer(5000, existingEditors, selector);
   if (!editor) throw new Error("没找到 X 的回复编辑器，可能是页面结构变了");
-
-  editor.focus();
-  try {
-    const sel = window.getSelection();
-    const range = document.createRange();
-    range.selectNodeContents(editor);
-    sel.removeAllRanges();
-    sel.addRange(range);
-    document.execCommand("delete", false, null);
-  } catch (_error) {
-    /* ignore */
+  if ((editor.innerText || editor.textContent || "").trim()) {
+    throw new Error("回复框已有内容，已停止填入以避免覆盖草稿");
   }
 
+  editor.focus();
   const ok = document.execCommand("insertText", false, text);
   if (ok) return;
 
-  try {
-    editor.dispatchEvent(new InputEvent("beforeinput", {
-      bubbles: true, cancelable: true, inputType: "insertText", data: text
-    }));
-    editor.dispatchEvent(new InputEvent("input", {
-      bubbles: true, cancelable: false, inputType: "insertText", data: text
-    }));
-  } catch (_error) {
-    editor.textContent = text;
-    editor.dispatchEvent(new Event("input", { bubbles: true }));
-  }
+  const accepted = editor.dispatchEvent(new InputEvent("beforeinput", {
+    bubbles: true, cancelable: true, inputType: "insertText", data: text
+  }));
+  if (!accepted) throw new Error("X 拒绝写入回复编辑器");
+  editor.textContent = text;
+  editor.dispatchEvent(new InputEvent("input", {
+    bubbles: true, cancelable: false, inputType: "insertText", data: text
+  }));
 }
 
-function waitForComposer(timeoutMs) {
+function waitForComposer(timeoutMs, existingEditors, selector) {
   const start = Date.now();
   return new Promise((resolve) => {
     const tick = () => {
-      const el =
-        document.querySelector('[data-testid="tweetTextarea_0"]') ||
-        document.querySelector('div[role="textbox"][contenteditable="true"]');
+      const el = Array.from(document.querySelectorAll(selector)).find((candidate) =>
+        !existingEditors.has(candidate) && candidate.isConnected && candidate.getClientRects().length > 0
+      );
       if (el) return resolve(el);
       if (Date.now() - start > timeoutMs) return resolve(null);
       requestAnimationFrame(tick);
@@ -1015,12 +1007,11 @@ function extractAuthor(tweet) {
 }
 
 /* ---------- 共享纯函数：从 shared-utils.js 引入 ----------
- * detectReplyLanguage / LANG_LABEL / twitterWeight* / escapeHtml 之前都在这里定义，
+ * detectReplyLanguage / LANG_LABEL / twitterWeightedLength / escapeHtml 之前都在这里定义，
  * 现在移到 shared-utils.js 单一来源。这里只做本地别名，避免改动调用点。
  */
 const detectReplyLanguage = self.detectLanguage;
 const LANG_LABEL = Object.fromEntries(Object.entries(self.LANGS || {}).map(([k, v]) => [k, v.label]));
-const twitterWeight = self.twitterWeight;
 const twitterWeightedLength = self.twitterWeightedLength;
 const escapeHtml = self.escapeHtml;
 
@@ -1075,7 +1066,9 @@ function injectStyles() {
       padding: 0 6px;
       border-radius: 3px;
       background: #1d9bf0;
+      border: 0;
       color: #fff;
+      font-family: inherit;
       font-size: 11px;
       line-height: 16px;
       vertical-align: middle;
@@ -1083,7 +1076,12 @@ function injectStyles() {
       user-select: none;
     }
     .${TRANSLATION_CLASS}-label:hover { background: #1a8cd8; }
-    .${TRANSLATION_CLASS}-provider { display: none; }
+    .${TRANSLATION_CLASS}-provider {
+      display: inline-block;
+      margin-left: 6px;
+      color: #536471;
+      font-size: 11px;
+    }
     .${TRANSLATION_CLASS}[data-state="error"] .${TRANSLATION_CLASS}-label { background: #f4212e; }
     .${TRANSLATION_CLASS}-tools {
       display: inline-flex;
@@ -1105,6 +1103,7 @@ function injectStyles() {
       transition: opacity 0.15s ease, background 0.15s ease, color 0.15s ease;
     }
     .${TRANSLATION_CLASS}:hover .${TRANSLATION_CLASS}-btn { opacity: 1; }
+    .${TRANSLATION_CLASS}:focus-within .${TRANSLATION_CLASS}-btn { opacity: 1; }
     .${TRANSLATION_CLASS}-btn:hover { background: rgba(29, 155, 240, 0.15); color: #1d9bf0; }
     .${TRANSLATION_CLASS}-btn.is-success { background: rgba(0, 186, 124, 0.15); color: #00ba7c; }
     .${TRANSLATION_CLASS}-btn:disabled { opacity: 0.4; cursor: not-allowed; }
@@ -1263,6 +1262,14 @@ function injectStyles() {
     }
     .${REPLY_PANEL_CLASS} button.xh-secondary:hover { background: #dfe7ea; }
     .${REPLY_PANEL_CLASS} button:disabled { opacity: 0.55; cursor: not-allowed; }
+    .${TRANSLATION_CLASS} button:focus-visible,
+    .${REPLY_BTN_CLASS}:focus-visible,
+    .${REPLY_PANEL_CLASS} button:focus-visible,
+    .${REPLY_PANEL_CLASS} select:focus-visible,
+    .${REPLY_PANEL_CLASS} textarea:focus-visible {
+      outline: 2px solid #1d9bf0;
+      outline-offset: 2px;
+    }
 
     .${REPLY_PANEL_CLASS} .xh-results {
       display: flex;

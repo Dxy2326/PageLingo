@@ -7,9 +7,10 @@
   const CONCURRENCY = 2;
 
   const DEFAULT_TRANSLATE = {
-    enabled: true,
+    enabled: false,
     providerId: "google",
-    targetLanguage: "zh-CN"
+    targetLanguage: "zh-CN",
+    allowedHosts: [...(self.DEFAULT_ALLOWED_HOSTS || ["x.com", "twitter.com", "github.com"])]
   };
 
   const SKIP_HOSTS = [
@@ -65,7 +66,8 @@
     queue: [],
     observer: null,
     viewportObserver: null,
-    pending: new WeakMap()
+    pending: new WeakMap(),
+    generation: 0
   };
 
   if (shouldRunOnThisPage()) init();
@@ -74,8 +76,10 @@
     injectStyles();
     await loadSettings();
     bindSettingsUpdates();
-    setupObservers();
-    scheduleScan(250);
+    if (isEnabledHere()) {
+      setupObservers();
+      scheduleScan(250);
+    }
   }
 
   function shouldRunOnThisPage() {
@@ -120,18 +124,34 @@
       const next = changes.translate.newValue || {};
       const prev = state.translate;
       state.translate = { ...state.translate, ...next };
-      if (
-        prev.enabled !== state.translate.enabled ||
+      const wasEnabledHere = isHostEnabled(prev);
+      const enabledHere = isEnabledHere();
+      if (wasEnabledHere && !enabledHere) {
+        stopObservers();
+        clearTranslations();
+      } else if (!wasEnabledHere && enabledHere) {
+        setupObservers();
+        scheduleScan(0);
+      } else if (enabledHere && (
         prev.targetLanguage !== state.translate.targetLanguage ||
         prev.providerId !== state.translate.providerId
-      ) {
+      )) {
         clearTranslations();
-        if (state.translate.enabled) scheduleScan(0);
+        scheduleScan(0);
       }
     });
   }
 
+  function isHostEnabled(settings) {
+    return !!settings.enabled && self.isHostAllowed(location.hostname, settings.allowedHosts);
+  }
+
+  function isEnabledHere() {
+    return isHostEnabled(state.translate);
+  }
+
   function setupObservers() {
+    if (state.observer) return;
     state.observer = new MutationObserver(() => scheduleScan(350));
     state.observer.observe(document.body, { childList: true, subtree: true });
 
@@ -151,8 +171,17 @@
     }, { rootMargin: "400px 0px" });
   }
 
+  function stopObservers() {
+    state.observer?.disconnect();
+    state.viewportObserver?.disconnect();
+    state.observer = null;
+    state.viewportObserver = null;
+    if (state.scanTimer) window.clearTimeout(state.scanTimer);
+    state.scanTimer = null;
+  }
+
   function scheduleScan(delay) {
-    if (state.scanTimer) return;
+    if (!isEnabledHere() || state.scanTimer) return;
     state.scanTimer = window.setTimeout(() => {
       state.scanTimer = null;
       scanPage();
@@ -160,7 +189,7 @@
   }
 
   function scanPage() {
-    if (!state.translate.enabled) return;
+    if (!isEnabledHere()) return;
     const nodes = Array.from(document.querySelectorAll(state.profile.selectors));
     for (const node of nodes) enqueueNode(node);
     drainQueue();
@@ -202,6 +231,7 @@
   }
 
   async function translateTasks(tasks) {
+    const generation = state.generation;
     for (const task of tasks) {
       renderTranslation(task.node, "Translating...", "loading");
       task.node.setAttribute(TRANSLATED_ATTR, "loading");
@@ -217,6 +247,7 @@
         url: location.href
       });
       if (!response?.ok || !Array.isArray(response.results)) throw new Error(response?.error || "Translate failed");
+      if (generation !== state.generation || !isEnabledHere()) return;
 
       response.results.forEach((result, index) => {
         const task = tasks[index];
@@ -231,6 +262,7 @@
         task.node.setAttribute(TRANSLATED_ATTR, "done");
       });
     } catch (error) {
+      if (generation !== state.generation || !isEnabledHere()) return;
       for (const task of tasks) {
         if (!task.node.isConnected) continue;
         renderTranslation(task.node, `Translate failed: ${error.message || error}`, "error");
@@ -279,12 +311,9 @@
     const cyrillic = stripped.match(/[\u0400-\u04ff]/g)?.length || 0;
     const kana = stripped.match(/[\u3040-\u30ff]/g)?.length || 0;
     const hangul = stripped.match(/[\uac00-\ud7af]/g)?.length || 0;
-    const nonCjkLetters = latin + cyrillic + kana + hangul;
-    if (nonCjkLetters === 0) return false;
-
-    const targetIsChinese = /^zh/i.test(state.translate.targetLanguage || "");
-    if (targetIsChinese && cjk / Math.max(cjk + nonCjkLetters, 1) >= 0.45) return false;
-    return true;
+    const letters = cjk + latin + cyrillic + kana + hangul;
+    if (letters === 0) return false;
+    return !self.isLikelyTargetLanguage(text, state.translate.targetLanguage);
   }
 
   function looksLikeCodeOrChrome(text) {
@@ -314,7 +343,8 @@
       block.className = TRANSLATION_CLASS;
       block.setAttribute("dir", "auto");
 
-      const label = document.createElement("span");
+      const label = document.createElement("button");
+      label.type = "button";
       label.className = `${TRANSLATION_CLASS}-label`;
       label.textContent = "译";
       label.title = "点击折叠/展开译文";
@@ -351,6 +381,7 @@
   }
 
   function clearTranslations() {
+    state.generation += 1;
     document.querySelectorAll(`.${TRANSLATION_CLASS}`).forEach((el) => el.remove());
     document.querySelectorAll(`[${TRANSLATED_ATTR}]`).forEach((el) => {
       el.removeAttribute(TRANSLATED_ATTR);
@@ -397,11 +428,18 @@
         margin-right: 7px;
         border-radius: 4px;
         background: #1f883d;
+        border: 0;
         color: #fff;
+        padding: 0;
+        font-family: inherit;
         font-size: 12px;
         line-height: 18px;
         cursor: pointer;
         user-select: none;
+      }
+      .${TRANSLATION_CLASS}-label:focus-visible {
+        outline: 2px solid currentColor;
+        outline-offset: 2px;
       }
       .${TRANSLATION_CLASS}[data-state="error"] .${TRANSLATION_CLASS}-label {
         background: #cf222e;

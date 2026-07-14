@@ -29,12 +29,13 @@ self.detectLanguage = function (text) {
   const hangul = stripped.match(/[\uac00-\ud7af\u1100-\u11ff]/g)?.length || 0;
   const cyrillic = stripped.match(/[\u0400-\u04ff]/g)?.length || 0;
   const arabic = stripped.match(/[\u0600-\u06ff]/g)?.length || 0;
+  const latin = stripped.match(/[A-Za-z\u00c0-\u024f]/g)?.length || 0;
 
   if (kana > 0) return "ja";
-  if (hangul >= 2) return "ko";
-  if (han >= 3) return "zh";
-  if (cyrillic >= 3) return "ru";
-  if (arabic >= 3) return "ar";
+  if (hangul > 0) return "ko";
+  if (han > 0 && han >= latin / 2) return "zh";
+  if (cyrillic > 0) return "ru";
+  if (arabic > 0) return "ar";
   return "en";
 };
 
@@ -43,15 +44,45 @@ self.detectLanguage = function (text) {
  *  - label：UI 显示名（短）
  *  - native：母语自称（用于 prompt 提示模型用什么语言回复）
  *  - en：英文学术名（让英文 prompt 也能引用）
- *  - rtl：是否右到左（暂未用，留作样式钩子）
  */
 self.LANGS = {
-  zh: { label: "中文",    native: "简体中文", en: "Simplified Chinese", rtl: false },
-  ja: { label: "日本語",  native: "日本語",   en: "Japanese",           rtl: false },
-  ko: { label: "한국어",  native: "한국어",   en: "Korean",             rtl: false },
-  en: { label: "English", native: "English",  en: "English",            rtl: false },
-  ru: { label: "Русский", native: "Русский",  en: "Russian",            rtl: false },
-  ar: { label: "العربية", native: "العربية",  en: "Arabic",             rtl: true  }
+  zh: { label: "中文",    native: "简体中文", en: "Simplified Chinese" },
+  ja: { label: "日本語",  native: "日本語",   en: "Japanese" },
+  ko: { label: "한국어",  native: "한국어",   en: "Korean" },
+  en: { label: "English", native: "English",  en: "English" },
+  ru: { label: "Русский", native: "Русский",  en: "Russian" },
+  ar: { label: "العربية", native: "العربية",  en: "Arabic" }
+};
+
+self.DEFAULT_ALLOWED_HOSTS = ["x.com", "twitter.com", "github.com"];
+
+self.isHostAllowed = function (host, allowedHosts) {
+  const value = String(host || "").toLowerCase();
+  const list = Array.isArray(allowedHosts) ? allowedHosts : self.DEFAULT_ALLOWED_HOSTS;
+  return list.some((item) => value === item || value.endsWith(`.${item}`));
+};
+
+/**
+ * Cheap script-level guard used before calling a translation provider.
+ * ponytail: this is intentionally heuristic; use chrome.i18n.detectLanguage if
+ * mixed-language accuracy becomes more important than avoiding API calls.
+ */
+self.isLikelyTargetLanguage = function (text, targetLanguage) {
+  const target = String(targetLanguage || "").toLowerCase();
+  const language = self.detectLanguage(text);
+  if (!target) return false;
+
+  if (target === "zh-cn" || target === "zh-tw") {
+    if (language !== "zh") return false;
+    const source = String(text || "");
+    const simplified = (source.match(/[这们个为与发后里国学说时来见体台湾门车书云龙]/g) || []).length;
+    const traditional = (source.match(/[這們個為與發後裡國學說時來見體臺灣門車書雲龍]/g) || []).length;
+    if (target === "zh-tw" && simplified > traditional) return false;
+    if (target === "zh-cn" && traditional > simplified) return false;
+    return true;
+  }
+
+  return target.split("-")[0] === language;
 };
 
 /**
@@ -85,20 +116,29 @@ self.twitterWeight = function (ch) {
 };
 
 self.twitterWeightedLength = function (text) {
+  const source = String(text || "");
   let total = 0;
-  for (const ch of String(text || "")) total += self.twitterWeight(ch);
+  let offset = 0;
+  for (const match of source.matchAll(/https?:\/\/[^\s]+/gi)) {
+    for (const ch of source.slice(offset, match.index)) total += self.twitterWeight(ch);
+    total += 23;
+    offset = match.index + match[0].length;
+  }
+  for (const ch of source.slice(offset)) total += self.twitterWeight(ch);
   return total;
 };
 
 self.truncateByTwitterWeight = function (text, maxWeight) {
-  if (self.twitterWeightedLength(text) <= maxWeight) return text;
+  const source = String(text || "");
+  if (self.twitterWeightedLength(source) <= maxWeight) return source;
   let weight = 0;
   let out = "";
-  for (const ch of text) {
-    const w = self.twitterWeight(ch);
+  const tokens = source.match(/https?:\/\/[^\s]+|[\s\S]/giu) || [];
+  for (const token of tokens) {
+    const w = /^https?:\/\/[^\s]+$/i.test(token) ? 23 : self.twitterWeight(token);
     if (weight + w > maxWeight - 1) break; // 留 1 给省略号
     weight += w;
-    out += ch;
+    out += token;
   }
   return out.trimEnd() + "…";
 };
@@ -124,4 +164,18 @@ self.escapeHtml = function (str) {
   return String(str).replace(/[&<>"']/g, (c) =>
     ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])
   );
+};
+
+self.normalizeProviderBaseUrl = function (value) {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  if (!raw) throw new Error("API Base URL 不能为空");
+  let url;
+  try { url = new URL(raw); } catch (_error) { throw new Error("API Base URL 格式不正确"); }
+  const local = ["localhost", "127.0.0.1", "::1"].includes(url.hostname);
+  if (url.protocol !== "https:" && !(url.protocol === "http:" && local)) {
+    throw new Error("远程 API Base URL 必须使用 HTTPS");
+  }
+  if (url.username || url.password) throw new Error("API Base URL 不能包含账号或密码");
+  if (url.search || url.hash) throw new Error("API Base URL 不能包含查询参数或片段");
+  return raw;
 };

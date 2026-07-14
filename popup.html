@@ -17,25 +17,25 @@
       </header>
 
       <nav class="tabs" role="tablist">
-        <button type="button" class="tab is-active" data-tab="translate" role="tab">
+        <button id="tab-translate" type="button" class="tab is-active" data-tab="translate" role="tab" aria-selected="true" aria-controls="panel-translate" tabindex="0">
           <span class="tab-emoji">📖</span><span class="tab-label">翻译</span>
         </button>
-        <button type="button" class="tab" data-tab="reply" role="tab">
+        <button id="tab-reply" type="button" class="tab" data-tab="reply" role="tab" aria-selected="false" aria-controls="panel-reply" tabindex="-1">
           <span class="tab-emoji">💬</span><span class="tab-label">回复</span>
         </button>
-        <button type="button" class="tab" data-tab="providers" role="tab">
+        <button id="tab-providers" type="button" class="tab" data-tab="providers" role="tab" aria-selected="false" aria-controls="panel-providers" tabindex="-1">
           <span class="tab-emoji">🔑</span><span class="tab-label">凭据</span>
         </button>
-        <button type="button" class="tab" data-tab="personas" role="tab">
+        <button id="tab-personas" type="button" class="tab" data-tab="personas" role="tab" aria-selected="false" aria-controls="panel-personas" tabindex="-1">
           <span class="tab-emoji">🎭</span><span class="tab-label">人设</span>
         </button>
       </nav>
 
       <!-- 翻译 -->
-      <section class="panel is-active" data-panel="translate">
+      <section id="panel-translate" class="panel is-active" data-panel="translate" role="tabpanel" aria-labelledby="tab-translate">
         <div class="section">
           <div class="row-between">
-            <p class="section-title">全网页自动翻译</p>
+            <p class="section-title">自动翻译</p>
             <label class="switch" title="开启或关闭自动翻译">
               <input id="translateEnabled" type="checkbox" aria-label="开启或关闭自动翻译">
               <span></span>
@@ -47,7 +47,15 @@
             <select id="translateProviderId"></select>
           </label>
           <p class="hint-inline" id="translateProviderHint"></p>
-          <p class="hint-inline">当前覆盖 X / Twitter、GitHub 以及常见英文正文网页。GitHub 会使用技术翻译风格。</p>
+          <p class="hint-inline">新安装默认关闭。开启后也只翻译允许的网站，GitHub 会使用技术翻译风格。</p>
+
+          <div id="currentSiteRow" class="current-site" hidden>
+            <div>
+              <span class="current-site-title">当前网站</span>
+              <span id="currentSiteHost" class="hint-inline"></span>
+            </div>
+            <button id="toggleCurrentSite" class="secondary small" type="button"></button>
+          </div>
 
           <label class="field">
             <span>目标语言</span>
@@ -69,7 +77,7 @@
       </section>
 
       <!-- 回复 -->
-      <section class="panel" data-panel="reply">
+      <section id="panel-reply" class="panel" data-panel="reply" role="tabpanel" aria-labelledby="tab-reply">
         <div class="section">
           <p class="section-title">AI 回复</p>
           <label class="field">
@@ -89,7 +97,7 @@
       </section>
 
       <!-- 凭据 -->
-      <section class="panel" data-panel="providers">
+      <section id="panel-providers" class="panel" data-panel="providers" role="tabpanel" aria-labelledby="tab-providers">
         <div class="section">
           <p class="section-title">API 凭据</p>
           <p class="hint-inline">每个供应商只填一次，翻译和回复共享。</p>
@@ -130,7 +138,7 @@
       </section>
 
       <!-- 人设 -->
-      <section class="panel" data-panel="personas">
+      <section id="panel-personas" class="panel" data-panel="personas" role="tabpanel" aria-labelledby="tab-personas">
         <div class="section">
           <div class="row-between">
             <p class="section-title">回复人设</p>
@@ -157,12 +165,13 @@
       </section>
 
       <footer>
-        <span>v1.0.0</span>
+        <span id="version"></span>
         <span class="footer-sep">·</span>
-        <a href="https://github.com/Shanks100/PageLingo" target="_blank" rel="noopener">GitHub</a>
+        <a href="https://github.com/Dxy2326/PageLingo" target="_blank" rel="noopener">GitHub</a>
       </footer>
     </main>
 
+    <script src="shared-utils.js"></script>
     <script src="personas.js"></script>
     <script src="providers.js"></script>
     <script src="popup.js"></script>
